@@ -1,0 +1,147 @@
+import type { SupervisorEnvelope, TaskSpec, Task } from "./types";
+import { listTasks } from "./scheduler";
+import { getConfig } from "./config";
+
+// Session state
+let supervisorSessionId: string | null = null;
+
+export async function supervisorSend(prompt: string, workdir?: string): Promise<string> {
+  // Dynamic import since @anthropic-ai/claude-code is ESM
+  const { query } = await import("@anthropic-ai/claude-code");
+
+  const queryOptions: any = {
+    maxTurns: 1,
+    abortController: new AbortController(),
+    permissionMode: "bypassPermissions" as const,
+  };
+
+  if (workdir) {
+    queryOptions.cwd = workdir;
+  }
+
+  // Resume session if we have one (this is the key perf improvement)
+  if (supervisorSessionId) {
+    queryOptions.resume = supervisorSessionId;
+  }
+
+  const options = { prompt, options: queryOptions };
+
+  let output = "";
+
+  for await (const msg of query(options)) {
+    if (msg.type === "result") {
+      if (msg.subtype === "success") {
+        output = typeof msg.result === "string" ? msg.result : JSON.stringify(msg.result);
+      }
+      if (msg.session_id) {
+        supervisorSessionId = msg.session_id;
+      }
+    } else if (msg.type === "assistant" && msg.message) {
+      // Accumulate text from content blocks
+      if (Array.isArray(msg.message.content)) {
+        for (const block of msg.message.content) {
+          if (block.type === "text") {
+            output += block.text;
+          }
+        }
+      }
+    }
+  }
+
+  return output;
+}
+
+export function buildSupervisorSystemPrompt(): string {
+  const config = getConfig();
+  const repoPath = config.repo || "(not configured)";
+
+  const agentNames =
+    Object.keys(config.agents || {})
+      .map((n) => `${n} (ok)`)
+      .join(", ") || "none configured";
+
+  const tasks = listTasks();
+  const running = tasks
+    .filter((t) => t.status === "running" || t.status === "claimed")
+    .map((t) => `${t.spec.id} (${t.spec.title || t.spec.objective.slice(0, 40)})`);
+  const pending = tasks
+    .filter((t) => t.status === "pending")
+    .map((t) => `${t.spec.id} (${t.spec.title || t.spec.objective.slice(0, 40)})`);
+
+  return `You are Hive Supervisor, a local AI agent coordinator. You manage coding tasks executed by Claude Code and Codex CLI agents.
+
+Current state:
+- Workspace: ${repoPath}
+- Running tasks: ${running.length > 0 ? running.join(", ") : "none"}
+- Pending tasks: ${pending.length > 0 ? pending.join(", ") : "none"}
+- Available agents: ${agentNames}
+
+You can:
+1. Create tasks when the user describes work to do
+2. Answer questions about the project or tasks
+3. Check task status
+4. Approve or reject completed tasks
+5. Start task execution
+
+Respond with a JSON object. Do NOT include markdown or explanation -- output ONLY the JSON object.
+
+Valid intents and their required fields:
+- create_tasks: {"intent":"create_tasks","response":"...","tasks":[{"title":"...","objective":"...","constraints":[],"inputs":[],"outputs":[],"depends_on":[],"priority":1},...]}
+- reply:        {"intent":"reply","response":"..."}
+- query_status: {"intent":"query_status","response":"..."}
+- approve:      {"intent":"approve","response":"...","task_id":"HIVE-N"}
+- reject:       {"intent":"reject","response":"...","task_id":"HIVE-N","reason":"..."}
+- run_task:     {"intent":"run_task","response":"...","task_id":"HIVE-N","agent":"claude"}
+
+For create_tasks, the "tasks" array must contain valid task specs with at minimum "title" and "objective".
+Always include a human-readable "response" field that summarises what you are doing.`;
+}
+
+export function extractSupervisorEnvelope(output: string): SupervisorEnvelope {
+  // Try to find a JSON object with an "intent" field
+  for (let offset = 0; offset < output.length; offset++) {
+    if (output[offset] !== "{") continue;
+
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    let end = -1;
+
+    for (let i = offset; i < output.length; i++) {
+      const ch = output[i];
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (ch === "\\" && inString) {
+        escaped = true;
+        continue;
+      }
+      if (ch === '"') {
+        inString = !inString;
+        continue;
+      }
+      if (inString) continue;
+      if (ch === "{") depth++;
+      if (ch === "}") {
+        depth--;
+        if (depth === 0) {
+          end = i;
+          break;
+        }
+      }
+    }
+
+    if (end === -1) continue;
+
+    try {
+      const env = JSON.parse(output.slice(offset, end + 1)) as SupervisorEnvelope;
+      if (env.intent) return env;
+    } catch {
+      continue;
+    }
+  }
+
+  // Fallback: treat as plain reply
+  return { intent: "reply", response: output.trim() };
+}

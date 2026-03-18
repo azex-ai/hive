@@ -1,0 +1,67 @@
+import fs from "fs";
+import path from "path";
+import yaml from "js-yaml";
+import type { HiveConfig } from "./types";
+
+let _config: HiveConfig | null = null;
+
+export function loadConfig(configPath?: string): HiveConfig {
+  if (_config) return _config;
+
+  const p = configPath || path.resolve(process.cwd(), "hive.yaml");
+
+  // If no config file exists, return defaults
+  if (!fs.existsSync(p)) {
+    _config = {
+      repo: ".",
+      output_dir: "./output",
+      agents: {
+        claude: { command: "claude", args: ["-p", "--output-format", "stream-json"], max_concurrent: 3 },
+        codex: { command: "codex", args: ["exec", "--json", "-q"], max_concurrent: 2 },
+      },
+      supervisor: { agent: "claude", model: "sonnet" },
+      scheduler: { lease_ttl: "30m", max_attempts: 3 },
+      evaluation: { cross_review: true, max_review_rounds: 3, auto_merge_threshold: 2 },
+    };
+    return _config;
+  }
+
+  const raw = fs.readFileSync(p, "utf-8");
+  _config = yaml.load(raw) as HiveConfig;
+
+  // Apply defaults
+  if (!_config.output_dir) _config.output_dir = "./output";
+  if (!_config.agents) _config.agents = {};
+
+  return _config;
+}
+
+export function getConfig(): HiveConfig {
+  return _config || loadConfig();
+}
+
+export function getOutputDir(): string {
+  const cfg = getConfig();
+  const dir = cfg.output_dir || "./output";
+  return path.resolve(dir);
+}
+
+export function parseDuration(s: string | undefined): number {
+  // Parse Go-style duration strings like "30m", "5s", "1h" to milliseconds
+  if (!s) return 30 * 60 * 1000; // default 30m
+  const match = s.match(/^(\d+)(ms|s|m|h)$/);
+  if (!match) return 30 * 60 * 1000;
+  const val = parseInt(match[1], 10);
+  switch (match[2]) {
+    case "ms":
+      return val;
+    case "s":
+      return val * 1000;
+    case "m":
+      return val * 60 * 1000;
+    case "h":
+      return val * 3600 * 1000;
+    default:
+      return val;
+  }
+}

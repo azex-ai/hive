@@ -1,0 +1,47 @@
+repo: .
+output_dir: ./output
+
+agents:
+  claude:
+    command: claude
+    args: ["-p", "--output-format", "stream-json"]
+    max_concurrent: 3
+  codex:
+    command: codex
+    args: ["exec", "--json", "-q"]
+    max_concurrent: 2
+
+scheduler:
+  lease_ttl: 30m
+  heartbeat_interval: 5m
+  max_attempts: 3
+
+evaluation:
+  auto_gate:
+    - test
+    - lint
+    - typecheck
+  cross_review: true
+  max_review_rounds: 3
+  auto_merge_threshold: 2
+  review_policy:
+    default:
+      writer: claude
+      reviewer: codex
+    overrides:
+      - match: { path: "internal/auth/*" }
+        writer: claude
+        reviewers: [codex, claude]
+
+worktree:
+  base_dir: /tmp/hive-worktrees
+  cleanup_on_merge: true
+
+context:
+  skills_dir: ""
+  rules_dir: ""
+  templates_dir: ./templates
+
+api:
+  backend_addr: "localhost:58080"
+  frontend_addr: "localhost:53000"
