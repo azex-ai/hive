@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { listTasks, submitTasks } from "@/lib/scheduler";
 import { publishEvent } from "@/lib/events";
+import { scheduleDispatch } from "@/lib/executor";
 
 export async function GET() {
   const tasks = listTasks();
@@ -16,5 +17,9 @@ export async function POST(req: NextRequest) {
   }
   const created = submitTasks(specs);
   publishEvent({ type: "tasks.submitted", data: { count: created.length } });
+
+  // Auto-dispatch: pick up newly created tasks immediately
+  scheduleDispatch();
+
   return NextResponse.json({ data: created }, { status: 201 });
 }

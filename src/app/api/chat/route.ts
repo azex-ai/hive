@@ -6,7 +6,7 @@ import {
   extractSupervisorEnvelope,
 } from "@/lib/supervisor";
 import { submitTasks, updateTaskStatus } from "@/lib/scheduler";
-import { runTask } from "@/lib/executor";
+import { runTask, scheduleDispatch } from "@/lib/executor";
 import { publishEvent } from "@/lib/events";
 import { addChatMessage, getChatHistory } from "@/lib/chat-store";
 import type { ChatMessage } from "@/lib/types";
@@ -69,6 +69,8 @@ export async function POST(req: NextRequest) {
               summary: env.response,
             },
           });
+          // Auto-dispatch: start executing newly created tasks
+          scheduleDispatch();
         }
         break;
 

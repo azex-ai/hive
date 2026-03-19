@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { compile } from "./compiler";
-import { getTask, updateTaskStatus } from "./scheduler";
+import { getTask, listTasks, updateTaskStatus } from "./scheduler";
 import { getConfig, getOutputDir } from "./config";
 import { createWorktree, removeWorktree, getWorktreeDiff } from "./worktree";
 import { publishEvent } from "./events";
@@ -11,6 +11,8 @@ import type { Role, TaskStatus } from "./types";
 const activeRuns: Record<string, number> = {};
 // Track session history per task for follow-ups
 const taskSessions: Record<string, string[]> = {};
+// Prevent concurrent dispatch loops
+let dispatching = false;
 
 export function getActiveRuns(): Record<string, number> {
   return { ...activeRuns };
@@ -180,5 +182,72 @@ export async function runTask(taskId: string, agentName: string, role: string): 
     }
   } finally {
     activeRuns[agentName] = Math.max(0, (activeRuns[agentName] || 0) - 1);
+    // After a task completes, try to dispatch more pending tasks
+    scheduleDispatch();
+  }
+}
+
+/**
+ * Auto-dispatch: pick up pending tasks and run them on available agents.
+ * Respects max_concurrent per agent. Called after task creation and task completion.
+ */
+export function scheduleDispatch(): void {
+  // Debounce — wait a tick so batch-created tasks are all visible
+  setTimeout(() => autoDispatch(), 50);
+}
+
+function autoDispatch(): void {
+  if (dispatching) return;
+  dispatching = true;
+
+  try {
+    const config = getConfig();
+    const agents = config.agents || {};
+
+    // Find pending tasks whose deps are all done
+    const tasks = listTasks();
+    const pending = tasks.filter((t) => {
+      if (t.status !== "pending") return false;
+      // Check deps are satisfied (scheduler already filters this in claimTask,
+      // but we do a simple check here too)
+      const deps = t.spec.depends_on || [];
+      return deps.every((depId) => {
+        const dep = tasks.find((d) => d.spec.id === depId);
+        return dep && dep.status === "done";
+      });
+    });
+
+    if (pending.length === 0) return;
+
+    // Pick agent with available capacity (prefer claude, fall back to codex)
+    const agentOrder = Object.keys(agents);
+
+    for (const task of pending) {
+      let assigned = false;
+
+      for (const agentName of agentOrder) {
+        const maxConcurrent = agents[agentName]?.max_concurrent || 3;
+        const current = activeRuns[agentName] || 0;
+
+        if (current < maxConcurrent) {
+          publishEvent({
+            type: "task_output",
+            task_id: task.spec.id,
+            data: { line: `[hive] auto-dispatching to ${agentName}` },
+          });
+          // Fire and forget — runTask manages its own status updates
+          runTask(task.spec.id, agentName, "writer").catch((err) => {
+            console.error(`[hive] auto-dispatch error for ${task.spec.id}:`, err);
+          });
+          assigned = true;
+          break;
+        }
+      }
+
+      // If no agent has capacity, stop trying (will retry when a task finishes)
+      if (!assigned) break;
+    }
+  } finally {
+    dispatching = false;
   }
 }
