@@ -5,8 +5,6 @@ description: Validate feature spec completeness before development starts. Ensur
 
 # Spec Completeness Check
 
-Adapted from Hive product profile's spec-driven development pattern.
-
 ## Mandatory Spec Fields
 
 Every feature spec MUST include:
@@ -24,7 +22,7 @@ api_endpoints:         # List of new/modified endpoints
     description: ""
 
 # Database
-schema_changes:        # New tables, columns, indexes
+schema_changes:        # New tables, columns, indexes (SQLite)
   - table: ""
     change: add_table | add_column | add_index
     details: ""
@@ -37,7 +35,6 @@ ui_changes:            # Pages, components affected
 
 # Quality
 a11y: ""               # Accessibility requirements
-responsive: ""         # Breakpoint behavior
 test_plan: ""          # What to test, coverage target
 
 # Dependencies

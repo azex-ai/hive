@@ -1,6 +1,6 @@
 ---
 name: quality-loop
-description: Continuous quality improvement loop for Azex. Scans, diagnoses, fixes, verifies. Run via /loop 10m /quality-loop or manually.
+description: Continuous quality improvement loop for Hive-TS. Scans, diagnoses, fixes, verifies. Run via /loop 10m /quality-loop or manually.
 ---
 
 # Quality Loop
@@ -15,29 +15,27 @@ description: Continuous quality improvement loop for Azex. Scans, diagnoses, fix
 
 **P0 — Build Health**
 ```bash
-cd server && go build ./... 2>&1
-cd server && go vet ./... 2>&1
-cd server && go test ./... 2>&1
+npm run build 2>&1
 ```
 任何 failure → 立即修复，不继续扫描。
 
-**P1 — Financial Invariants**
+**P1 — TypeScript Strictness**
 ```bash
-cd server && go test ./internal/core/ledger/... -run Invariant -count=1 -v 2>&1
+npx tsc --noEmit 2>&1
 ```
-任何 invariant failure → 立即停止所有其他工作，这是资金安全问题。
+类型错误 → 立即修复。
 
 **P2 — Architecture Compliance**
-扫描 `internal/core/` 下所有 .go 文件，检查是否 import 了 forbidden 包：
-- `net/http`, `log/slog`, `go-chi`, `bizcode`, `httpx`, `pgx`, `database/sql`
+扫描 `src/lib/` 下的引擎文件，检查：
+- 不得 import React 或 client-only 模块
+- `components/ui/` 不含业务逻辑
+- 客户端组件不 import better-sqlite3, fs, path
 
-**P3 — Test Coverage Gaps**
-找出没有 `_test.go` 对应的 .go 文件（排除 adapter、generated、DTO）：
-```bash
-# 列出所有 .go 文件（非 test、非 generated）
-# 对比 _test.go 存在性
-# 标记金融模块（billing, ledger, credit_reserver）为高优
-```
+**P3 — Code Quality**
+- 查找 `console.log` 残留
+- 查找 `any` / `as any` 使用
+- 查找空 `catch {}` 块
+- 查找未使用的 imports
 
 **P4 — Stale Documentation**
 检查 CLAUDE.md 里的项目结构是否与实际文件结构一致。
@@ -53,7 +51,7 @@ cd server && go test ./internal/core/ledger/... -run Invariant -count=1 -v 2>&1
 
 按优先级逐个修复。每个修复后立即 verify：
 ```bash
-go build ./... && go vet ./... && go test ./...
+npm run build
 ```
 如果 verify 失败 → 回滚这个修复，标记为 "needs human review"。
 
@@ -63,26 +61,23 @@ go build ./... && go vet ./... && go test ./...
 ## Quality Loop Report — {timestamp}
 
 ### Fixed
-- [P2] internal/llmgate/gateway.go: removed unused import
-- [P3] internal/handler/billing.go: added Content-Type validation
+- [P2] src/lib/executor.ts: removed unused import
+- [P3] src/components/task-card.tsx: added aria-label to icon button
 
 ### Needs Attention
-- [P1] internal/adapter/postgres/credit_reserver.go: no test file (financial module)
+- [P1] src/lib/scheduler.ts: `any` type on line 42
 
 ### Metrics
-- Build: ✅
-- Vet: ✅
-- Tests: 15/15 pass
-- Invariants: 9/9 pass
-- Architecture violations: 0
-- Untested financial files: 1
+- Build: pass/fail
+- TypeScript: pass/fail
+- Architecture violations: N
+- console.log residuals: N
 ```
 
 ## 触发方式
 
 - 手动: `/quality-loop`
 - 定时: `/loop 10m /quality-loop`
-- Sub-phase 交付后自动（通过 agents.md 规则）
 
 ## 注意
 
