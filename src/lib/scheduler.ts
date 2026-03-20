@@ -1,8 +1,39 @@
+import "server-only";
 import Database from "better-sqlite3";
 import path from "path";
 import fs from "fs";
 import { v4 as uuidv4 } from "uuid";
 import type { Task, TaskSpec, TaskStatus, Attempt, Artifact, Lease } from "./types";
+
+interface TaskRow {
+  seq: number;
+  id: string;
+  title: string;
+  spec_json: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface AttemptRow {
+  id: string;
+  task_id: string;
+  agent: string;
+  role: string;
+  branch: string;
+  status: string;
+  worker_id: string;
+  started_at: string;
+  completed_at: string | null;
+}
+
+interface ArtifactRow {
+  id: string;
+  type: string;
+  path: string;
+  created_at: string;
+  agent: string;
+}
 
 let _db: Database.Database | null = null;
 
@@ -103,7 +134,7 @@ export function listTasks(): Task[] {
   const db = getDb();
   const rows = db
     .prepare("SELECT id, title, spec_json, status, created_at, updated_at FROM tasks ORDER BY seq ASC")
-    .all() as any[];
+    .all() as TaskRow[];
 
   return rows.map(rowToTask);
 }
@@ -112,7 +143,7 @@ export function getTask(id: string): Task | null {
   const db = getDb();
   const row = db
     .prepare("SELECT id, title, spec_json, status, created_at, updated_at FROM tasks WHERE id = ?")
-    .get(id) as any;
+    .get(id) as TaskRow | undefined;
 
   return row ? rowToTask(row) : null;
 }
@@ -129,13 +160,13 @@ export function getAttempts(taskId: string): Attempt[] {
     .prepare(
       "SELECT id, task_id, agent, role, branch, status, worker_id, started_at, completed_at FROM attempts WHERE task_id = ? ORDER BY started_at ASC",
     )
-    .all(taskId) as any[];
+    .all(taskId) as AttemptRow[];
 
-  return rows.map((r) => ({
+  return rows.map((r: AttemptRow) => ({
     id: r.id,
     task_id: r.task_id,
     agent: r.agent,
-    role: r.role as any,
+    role: r.role as Attempt["role"],
     branch: r.branch,
     status: r.status,
     worker_id: r.worker_id,
@@ -148,64 +179,141 @@ export function claimTask(workerId: string): { task: Task; lease: Lease } | null
   const db = getDb();
   const leaseTTL = 30 * 60 * 1000; // 30 min
 
-  const row = db
-    .prepare(
-      `
-    SELECT t.id, t.title, t.spec_json, t.status, t.created_at, t.updated_at
-    FROM tasks t
-    WHERE t.status = 'pending'
-      AND NOT EXISTS (
-        SELECT 1 FROM task_deps d
-        JOIN tasks dep ON dep.id = d.depends_on
-        WHERE d.task_id = t.id AND dep.status != 'done'
+  const claim = db.transaction(() => {
+    const row = db
+      .prepare(
+        `
+      SELECT t.id, t.title, t.spec_json, t.status, t.created_at, t.updated_at
+      FROM tasks t
+      WHERE t.status = 'pending'
+        AND NOT EXISTS (
+          SELECT 1 FROM task_deps d
+          JOIN tasks dep ON dep.id = d.depends_on
+          WHERE d.task_id = t.id AND dep.status != 'done'
+        )
+      ORDER BY t.seq ASC
+      LIMIT 1
+    `,
       )
-    ORDER BY t.seq ASC
-    LIMIT 1
-  `,
-    )
-    .get() as any;
+      .get() as TaskRow | undefined;
 
-  if (!row) return null;
+    if (!row) return null;
 
-  const now = new Date();
-  const expires = new Date(now.getTime() + leaseTTL);
-  const attemptId = uuidv4();
-  const task = rowToTask(row);
+    const now = new Date();
+    const expires = new Date(now.getTime() + leaseTTL);
+    const attemptId = uuidv4();
+    const task = rowToTask(row);
 
-  db.prepare("UPDATE tasks SET status = 'claimed', updated_at = ? WHERE id = ?").run(
-    now.toISOString(),
-    task.spec.id,
-  );
+    db.prepare("UPDATE tasks SET status = 'claimed', updated_at = ? WHERE id = ?").run(
+      now.toISOString(),
+      task.spec.id,
+    );
 
-  db.prepare(
-    "INSERT INTO attempts (id, task_id, agent, role, branch, status, worker_id, lease_expires_at, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-  ).run(
-    attemptId,
-    task.spec.id,
-    workerId,
-    "writer",
-    "",
-    "running",
-    workerId,
-    expires.toISOString(),
-    now.toISOString(),
-  );
+    db.prepare(
+      "INSERT INTO attempts (id, task_id, agent, role, branch, status, worker_id, lease_expires_at, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    ).run(
+      attemptId,
+      task.spec.id,
+      workerId,
+      "writer",
+      "",
+      "running",
+      workerId,
+      expires.toISOString(),
+      now.toISOString(),
+    );
 
-  task.status = "claimed";
-  task.updated_at = now.toISOString();
+    task.status = "claimed";
+    task.updated_at = now.toISOString();
 
-  return {
-    task,
-    lease: {
-      attempt_id: attemptId,
-      worker_id: workerId,
-      expires_at: expires.toISOString(),
-      ttl_ms: leaseTTL,
-    },
-  };
+    return {
+      task,
+      lease: {
+        attempt_id: attemptId,
+        worker_id: workerId,
+        expires_at: expires.toISOString(),
+        ttl_ms: leaseTTL,
+      },
+    };
+  });
+
+  return claim();
 }
 
-function rowToTask(row: any): Task {
+/** Create an attempt record when runTask starts (not via claimTask) */
+export function createAttempt(taskId: string, agent: string, role: string): string {
+  const db = getDb();
+  const attemptId = uuidv4();
+  const now = new Date().toISOString();
+
+  db.prepare(
+    "INSERT INTO attempts (id, task_id, agent, role, branch, status, worker_id, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+  ).run(attemptId, taskId, agent, role, "", "running", agent, now);
+
+  return attemptId;
+}
+
+/** Save branch info to an attempt */
+export function saveAttemptBranch(attemptId: string, branch: string): void {
+  const db = getDb();
+  db.prepare("UPDATE attempts SET branch = ? WHERE id = ?").run(branch, attemptId);
+}
+
+/** Mark an attempt as completed or failed */
+export function completeAttempt(attemptId: string, status: "done" | "failed"): void {
+  const db = getDb();
+  const now = new Date().toISOString();
+  db.prepare("UPDATE attempts SET status = ?, completed_at = ? WHERE id = ?").run(status, now, attemptId);
+}
+
+/** Get the latest attempt's branch for a task */
+export function getTaskBranch(taskId: string): { branch: string; agent: string; attemptId: string } | null {
+  const db = getDb();
+  const row = db
+    .prepare(
+      "SELECT id, branch, agent FROM attempts WHERE task_id = ? AND branch != '' ORDER BY started_at DESC LIMIT 1",
+    )
+    .get(taskId) as Pick<AttemptRow, "id" | "branch" | "agent"> | undefined;
+
+  return row ? { branch: row.branch, agent: row.agent, attemptId: row.id } : null;
+}
+
+/** Record an artifact in the DB */
+export function saveArtifact(attemptId: string, type: string, filePath: string): string {
+  const db = getDb();
+  const id = uuidv4();
+  const now = new Date().toISOString();
+
+  db.prepare(
+    "INSERT INTO artifacts (id, attempt_id, type, path, created_at) VALUES (?, ?, ?, ?, ?)",
+  ).run(id, attemptId, type, filePath, now);
+
+  return id;
+}
+
+/** Get all artifacts for a task (across all attempts) */
+export function getTaskArtifacts(taskId: string): Array<{ id: string; type: string; path: string; agent: string; created_at: string }> {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT a.id, a.type, a.path, a.created_at, att.agent
+       FROM artifacts a
+       JOIN attempts att ON att.id = a.attempt_id
+       WHERE att.task_id = ?
+       ORDER BY a.created_at ASC`,
+    )
+    .all(taskId) as ArtifactRow[];
+
+  return rows.map((r: ArtifactRow) => ({
+    id: r.id,
+    type: r.type,
+    path: r.path,
+    agent: r.agent,
+    created_at: r.created_at,
+  }));
+}
+
+function rowToTask(row: TaskRow): Task {
   const spec = JSON.parse(row.spec_json) as TaskSpec;
   if (!spec.title && row.title) spec.title = row.title;
   return {

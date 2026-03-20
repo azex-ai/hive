@@ -12,7 +12,12 @@ import { addChatMessage, getChatHistory } from "@/lib/chat-store";
 import type { ChatMessage } from "@/lib/types";
 
 export async function POST(req: NextRequest) {
-  const body = await req.json();
+  let body;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "invalid JSON body" }, { status: 400 });
+  }
   const message = body.message;
   if (!message)
     return NextResponse.json(
@@ -97,7 +102,18 @@ export async function POST(req: NextRequest) {
       case "run_task":
         if (env.task_id) {
           const agent = env.agent || "claude";
-          runTask(env.task_id, agent, "writer").catch(() => {});
+          runTask(env.task_id, agent, "writer").catch((err: unknown) => {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            console.error(
+              `[hive] runTask failed for ${env.task_id}:`,
+              errMsg,
+            );
+            publishEvent({
+              type: "task.error",
+              task_id: env.task_id,
+              data: { error: errMsg },
+            });
+          });
         }
         break;
     }
@@ -116,7 +132,10 @@ export async function POST(req: NextRequest) {
         data: {
           intent: env.intent,
           response: env.response,
-          tasks: createdTasks.map((t: any) => t.spec || t),
+          tasks: createdTasks.map((t) => {
+            const obj = t as { spec?: unknown };
+            return obj.spec || t;
+          }),
           task_id: env.task_id,
           agent: env.agent,
         },

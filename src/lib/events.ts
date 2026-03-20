@@ -1,9 +1,7 @@
-export interface SSEEvent {
-  type: string;
-  task_id?: string;
-  data: any;
-  timestamp?: string;
-}
+import "server-only";
+import type { SSEEvent } from "./types";
+
+export type { SSEEvent };
 
 type Subscriber = (event: SSEEvent) => void;
 

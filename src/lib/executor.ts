@@ -1,9 +1,10 @@
+import "server-only";
 import fs from "fs";
 import path from "path";
 import { compile } from "./compiler";
-import { getTask, listTasks, updateTaskStatus } from "./scheduler";
+import { getTask, listTasks, updateTaskStatus, createAttempt, saveAttemptBranch, completeAttempt, saveArtifact } from "./scheduler";
 import { getConfig, getOutputDir } from "./config";
-import { createWorktree, removeWorktree, getWorktreeDiff } from "./worktree";
+import { createWorktree, detachWorktree, getWorktreeDiff, detectGitRepo } from "./worktree";
 import { publishEvent } from "./events";
 import type { Role, TaskStatus } from "./types";
 
@@ -25,39 +26,53 @@ export function getTaskSessionHistory(taskId: string): string[] {
 export function appendTaskSession(taskId: string, ...entries: string[]): void {
   if (!taskSessions[taskId]) taskSessions[taskId] = [];
   taskSessions[taskId].push(...entries);
+  if (taskSessions[taskId].length > 50) {
+    taskSessions[taskId] = taskSessions[taskId].slice(-50);
+  }
 }
 
 export async function runTask(taskId: string, agentName: string, role: string): Promise<void> {
-  activeRuns[agentName] = (activeRuns[agentName] || 0) + 1;
-
   try {
     const task = getTask(taskId);
     if (!task) throw new Error(`task ${taskId} not found`);
+
+    // Create attempt record in DB
+    const attemptId = createAttempt(taskId, agentName, role);
 
     // Update to running
     updateTaskStatus(taskId, "running");
     publishEvent({
       type: "task_status",
       task_id: taskId,
-      data: { status: "running", agent: agentName, role },
+      data: { status: "running", agent: agentName, role, attempt_id: attemptId },
     });
 
     // Compile prompt
     const prompt = compile(task.spec, agentName, role as Role);
 
-    // Create worktree
+    // Resolve working directory: git worktree or output dir
     const config = getConfig();
     const outputDir = getOutputDir();
     let workdir = "";
     let branch = "";
+    let repoRoot: string | null = null;
 
-    if (config.repo) {
+    // Auto-detect git repo from configured repo path
+    const repoPath = config.repo ? path.resolve(config.repo) : null;
+    if (repoPath) {
+      repoRoot = detectGitRepo(repoPath);
+    }
+
+    if (repoRoot) {
+      // Git repo mode: create worktree branch for isolated work
       const shortId = taskId.length > 8 ? taskId.slice(0, 8) : taskId;
-      branch = `task/${shortId}/${agentName}-${Date.now()}`;
-      const baseDir = config.worktree?.base_dir || path.join(config.repo, ".hive/worktrees");
+      branch = `hive/${shortId}/${agentName}`;
+      const baseDir = config.worktree?.base_dir || path.join(repoRoot, ".hive/worktrees");
 
       try {
-        workdir = createWorktree(config.repo, baseDir, branch);
+        workdir = createWorktree(repoRoot, baseDir, branch);
+        // Save branch info to attempt for later merge/cleanup
+        saveAttemptBranch(attemptId, branch);
       } catch (err: any) {
         // Fall back to output dir
         const taskOutDir = path.join(outputDir, taskId);
@@ -69,6 +84,11 @@ export async function runTask(taskId: string, agentName: string, role: string): 
           data: { line: `[warn] worktree create failed: ${err.message} -- using output dir` },
         });
       }
+    } else {
+      // No git repo: output dir mode
+      const taskOutDir = path.join(outputDir, taskId);
+      fs.mkdirSync(taskOutDir, { recursive: true });
+      workdir = taskOutDir;
     }
 
     publishEvent({
@@ -145,15 +165,22 @@ export async function runTask(taskId: string, agentName: string, role: string): 
       });
     }
 
-    // Save artifacts
+    // Save artifacts to disk + DB
     const taskOutDir = path.join(outputDir, taskId);
     fs.mkdirSync(taskOutDir, { recursive: true });
-    fs.writeFileSync(path.join(taskOutDir, "output.log"), output);
 
-    if (workdir && branch && config.repo) {
+    const logPath = path.join(taskOutDir, "output.log");
+    fs.writeFileSync(logPath, output);
+    saveArtifact(attemptId, "log", logPath);
+
+    if (repoRoot && branch) {
       try {
-        const diff = getWorktreeDiff(config.repo, branch);
-        if (diff) fs.writeFileSync(path.join(taskOutDir, "diff.patch"), diff);
+        const diff = getWorktreeDiff(repoRoot, branch);
+        if (diff) {
+          const diffPath = path.join(taskOutDir, "diff.patch");
+          fs.writeFileSync(diffPath, diff);
+          saveArtifact(attemptId, "diff", diffPath);
+        }
       } catch {
         /* best effort */
       }
@@ -162,20 +189,21 @@ export async function runTask(taskId: string, agentName: string, role: string): 
     // Save session history
     appendTaskSession(taskId, `Prompt: ${prompt}`, `Output: ${output}`);
 
-    // Update status
+    // Update attempt + task status
+    completeAttempt(attemptId, success ? "done" : "failed");
     updateTaskStatus(taskId, finalStatus);
 
     publishEvent({
       type: success ? "task_complete" : "task_error",
       task_id: taskId,
-      data: { status: finalStatus, exit_code: String(exitCode) },
+      data: { status: finalStatus, exit_code: String(exitCode), branch: branch || undefined },
     });
 
-    // Cleanup worktree
-    if (branch && config.repo) {
+    // Detach worktree dir but KEEP the branch for review/merge
+    if (branch && repoRoot) {
       try {
-        const baseDir = config.worktree?.base_dir || path.join(config.repo, ".hive/worktrees");
-        removeWorktree(config.repo, baseDir, branch);
+        const baseDir = config.worktree?.base_dir || path.join(repoRoot, ".hive/worktrees");
+        detachWorktree(repoRoot, baseDir, branch);
       } catch {
         /* best effort */
       }
@@ -235,7 +263,8 @@ function autoDispatch(): void {
             task_id: task.spec.id,
             data: { line: `[hive] auto-dispatching to ${agentName}` },
           });
-          // Fire and forget — runTask manages its own status updates
+          // Increment synchronously BEFORE starting async task
+          activeRuns[agentName] = (activeRuns[agentName] || 0) + 1;
           runTask(task.spec.id, agentName, "writer").catch((err) => {
             console.error(`[hive] auto-dispatch error for ${task.spec.id}:`, err);
           });

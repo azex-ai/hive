@@ -1,9 +1,10 @@
-import { execSync } from "child_process";
+import "server-only";
+import { execFileSync } from "child_process";
 import type { AgentCfg, AgentHealth } from "./types";
 
 export function checkAgentHealth(name: string, command: string): AgentHealth {
   try {
-    const output = execSync(`${command} --version`, {
+    const output = execFileSync(command, ["--version"], {
       encoding: "utf-8",
       timeout: 5000,
       stdio: ["pipe", "pipe", "pipe"],
@@ -18,7 +19,7 @@ export function checkAgentHealth(name: string, command: string): AgentHealth {
     return { name, available: true, version };
   } catch {
     try {
-      const output = execSync(`${command} -v`, {
+      const output = execFileSync(command, ["-v"], {
         encoding: "utf-8",
         timeout: 5000,
         stdio: ["pipe", "pipe", "pipe"],

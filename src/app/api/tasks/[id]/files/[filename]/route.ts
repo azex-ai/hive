@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getOutputDir } from "@/lib/config";
+import { isValidTaskId } from "@/lib/validate";
 import fs from "fs";
 import path from "path";
 
@@ -10,6 +11,10 @@ export async function GET(
   }: { params: Promise<{ id: string; filename: string }> },
 ) {
   const { id, filename } = await params;
+
+  if (!isValidTaskId(id)) {
+    return NextResponse.json({ error: "invalid task id" }, { status: 400 });
+  }
 
   if (filename.includes("/") || filename.includes("..")) {
     return NextResponse.json({ error: "invalid filename" }, { status: 400 });

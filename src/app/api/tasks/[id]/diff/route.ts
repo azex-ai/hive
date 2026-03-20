@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getOutputDir } from "@/lib/config";
+import { isValidTaskId } from "@/lib/validate";
 import fs from "fs";
 import path from "path";
 
@@ -8,6 +9,9 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
+  if (!isValidTaskId(id)) {
+    return NextResponse.json({ error: "invalid task id" }, { status: 400 });
+  }
   const patchPath = path.join(getOutputDir(), id, "diff.patch");
   let diff = "";
   try {

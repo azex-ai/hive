@@ -24,12 +24,24 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  const body = await req.json();
+  let body;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "invalid JSON body" }, { status: 400 });
+  }
   if (!body.repo_path)
     return NextResponse.json(
       { error: "repo_path is required" },
       { status: 400 },
     );
+
+  if (!path.isAbsolute(body.repo_path) || body.repo_path.includes("..")) {
+    return NextResponse.json(
+      { error: "repo_path must be an absolute path without .." },
+      { status: 400 },
+    );
+  }
 
   const config = getConfig();
   config.repo = body.repo_path;

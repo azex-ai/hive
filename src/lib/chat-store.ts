@@ -1,3 +1,4 @@
+import "server-only";
 import type { ChatMessage } from "./types";
 
 const chatHistory: ChatMessage[] = [];

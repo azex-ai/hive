@@ -1,6 +1,8 @@
+import "server-only";
 import type { SupervisorEnvelope, TaskSpec, Task } from "./types";
 import { listTasks } from "./scheduler";
 import { getConfig } from "./config";
+import { extractJSON } from "./json-extract";
 
 // Session state
 let supervisorSessionId: string | null = null;
@@ -26,29 +28,31 @@ export async function supervisorSend(prompt: string, workdir?: string): Promise<
 
   const options = { prompt, options: queryOptions };
 
-  let output = "";
+  let finalResult = "";
+  let accumulated = "";
 
   for await (const msg of query(options)) {
     if (msg.type === "result") {
       if (msg.subtype === "success") {
-        output = typeof msg.result === "string" ? msg.result : JSON.stringify(msg.result);
+        finalResult = typeof msg.result === "string" ? msg.result : JSON.stringify(msg.result);
       }
       if (msg.session_id) {
         supervisorSessionId = msg.session_id;
       }
     } else if (msg.type === "assistant" && msg.message) {
-      // Accumulate text from content blocks
+      // Accumulate text from content blocks as fallback
       if (Array.isArray(msg.message.content)) {
         for (const block of msg.message.content) {
           if (block.type === "text") {
-            output += block.text;
+            accumulated += block.text;
           }
         }
       }
     }
   }
 
-  return output;
+  // Prefer final result; fall back to accumulated streaming text
+  return finalResult || accumulated;
 }
 
 export function buildSupervisorSystemPrompt(): string {
@@ -98,50 +102,10 @@ Always include a human-readable "response" field that summarises what you are do
 }
 
 export function extractSupervisorEnvelope(output: string): SupervisorEnvelope {
-  // Try to find a JSON object with an "intent" field
-  for (let offset = 0; offset < output.length; offset++) {
-    if (output[offset] !== "{") continue;
-
-    let depth = 0;
-    let inString = false;
-    let escaped = false;
-    let end = -1;
-
-    for (let i = offset; i < output.length; i++) {
-      const ch = output[i];
-      if (escaped) {
-        escaped = false;
-        continue;
-      }
-      if (ch === "\\" && inString) {
-        escaped = true;
-        continue;
-      }
-      if (ch === '"') {
-        inString = !inString;
-        continue;
-      }
-      if (inString) continue;
-      if (ch === "{") depth++;
-      if (ch === "}") {
-        depth--;
-        if (depth === 0) {
-          end = i;
-          break;
-        }
-      }
-    }
-
-    if (end === -1) continue;
-
-    try {
-      const env = JSON.parse(output.slice(offset, end + 1)) as SupervisorEnvelope;
-      if (env.intent) return env;
-    } catch {
-      continue;
-    }
+  const obj = extractJSON(output);
+  if (obj && "intent" in obj) {
+    return obj as unknown as SupervisorEnvelope;
   }
-
   // Fallback: treat as plain reply
   return { intent: "reply", response: output.trim() };
 }

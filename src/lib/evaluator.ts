@@ -1,5 +1,7 @@
-import { execSync } from "child_process";
-import type { ReviewReport, Finding } from "./types";
+import "server-only";
+import { execFileSync } from "child_process";
+import type { ReviewReport } from "./types";
+import { extractJSON } from "./json-extract";
 
 export interface GateResult {
   passed: boolean;
@@ -11,7 +13,8 @@ export function autoGate(workdir: string, checks: string[]): GateResult {
 
   for (const check of checks) {
     try {
-      const output = execSync(check, {
+      const parts = check.split(/\s+/);
+      const output = execFileSync(parts[0], parts.slice(1), {
         cwd: workdir || undefined,
         encoding: "utf-8",
         timeout: 60000,
@@ -39,45 +42,6 @@ export function shouldAutoMerge(report: ReviewReport | null, threshold: number):
 }
 
 export function parseReviewReport(output: string): ReviewReport | null {
-  const start = output.indexOf("{");
-  if (start === -1) return null;
-
-  // Find matching closing brace
-  let depth = 0;
-  let end = -1;
-  let inString = false;
-  let escaped = false;
-
-  for (let i = start; i < output.length; i++) {
-    const ch = output[i];
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (ch === "\\" && inString) {
-      escaped = true;
-      continue;
-    }
-    if (ch === '"') {
-      inString = !inString;
-      continue;
-    }
-    if (inString) continue;
-    if (ch === "{") depth++;
-    if (ch === "}") {
-      depth--;
-      if (depth === 0) {
-        end = i;
-        break;
-      }
-    }
-  }
-
-  if (end === -1) return null;
-
-  try {
-    return JSON.parse(output.slice(start, end + 1)) as ReviewReport;
-  } catch {
-    return null;
-  }
+  const obj = extractJSON(output);
+  return obj ? (obj as unknown as ReviewReport) : null;
 }

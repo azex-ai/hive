@@ -9,7 +9,12 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  const specs = await req.json();
+  let specs;
+  try {
+    specs = await req.json();
+  } catch {
+    return NextResponse.json({ error: "invalid JSON body" }, { status: 400 });
+  }
   // Clean specs: move id to title if title empty, clear id
   for (const s of specs) {
     if (!s.title && s.id) s.title = s.id;

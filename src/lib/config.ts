@@ -1,3 +1,4 @@
+import "server-only";
 import fs from "fs";
 import path from "path";
 import yaml from "js-yaml";
@@ -28,6 +29,10 @@ export function loadConfig(configPath?: string): HiveConfig {
 
   const raw = fs.readFileSync(p, "utf-8");
   _config = yaml.load(raw) as HiveConfig;
+
+  if (!_config || typeof _config !== "object") {
+    throw new Error("invalid hive.yaml: expected an object");
+  }
 
   // Apply defaults
   if (!_config.output_dir) _config.output_dir = "./output";

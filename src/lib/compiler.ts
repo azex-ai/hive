@@ -1,3 +1,4 @@
+import "server-only";
 import type { TaskSpec, Role } from "./types";
 
 export function compile(spec: TaskSpec, agent: string, role: Role): string {
