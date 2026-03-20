@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { fetchWorkspace, fetchStatus, fetchHealth, shutdownServer } from "@/lib/api";
 import type { WorkspaceConfig, ServerStatus, AgentHealth } from "@/lib/types";
@@ -10,6 +10,7 @@ export function TopBar() {
   const [status, setStatus] = useState<ServerStatus | null>(null);
   const [connected, setConnected] = useState(true);
   const [shutting, setShutting] = useState(false);
+  const [confirmStop, setConfirmStop] = useState(false);
   const [agentHealths, setAgentHealths] = useState<AgentHealth[]>([]);
 
   useEffect(() => {
@@ -39,15 +40,19 @@ export function TopBar() {
     return () => clearInterval(id);
   }, []);
 
-  async function handleStop() {
-    if (!confirm("Stop Hive? The process will exit.")) return;
+  const handleStop = useCallback(async () => {
+    if (!confirmStop) {
+      setConfirmStop(true);
+      return;
+    }
     setShutting(true);
+    setConfirmStop(false);
     try {
       await shutdownServer();
     } catch {
       // expected — process may exit before response completes
     }
-  }
+  }, [confirmStop]);
 
   const repoPath = workspace?.repo_path || "";
   const displayPath = repoPath
@@ -102,6 +107,7 @@ export function TopBar() {
                   className={`inline-block w-1.5 h-1.5 rounded-full ${
                     !a.available ? "bg-red-500" : isRunning ? "bg-green-500" : "bg-zinc-600"
                   }`}
+                  aria-label={`${a.name}: ${!a.available ? "unavailable" : isRunning ? "running" : "idle"}`}
                 />
                 <span className={!a.available ? "text-zinc-600" : isRunning ? "text-green-400" : "text-zinc-500"}>
                   {a.name} ({activeCount}/{maxConcurrent})
@@ -118,6 +124,7 @@ export function TopBar() {
           className={`inline-block w-1.5 h-1.5 rounded-full ${
             connected ? "bg-green-500" : "bg-red-500"
           }`}
+          aria-label={connected ? "Server connected" : "Server disconnected"}
         />
         <span className={connected ? "text-zinc-500" : "text-red-400"}>
           {connected ? "running" : "disconnected"}
@@ -125,13 +132,32 @@ export function TopBar() {
       </span>
 
       {/* Stop button */}
-      <button
-        onClick={handleStop}
-        disabled={shutting}
-        className="px-2 py-0.5 text-[11px] font-mono border border-red-800 text-red-400 hover:bg-red-950 hover:text-red-300 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-      >
-        {shutting ? "stopping..." : "stop"}
-      </button>
+      {confirmStop ? (
+        <span className="flex items-center gap-1.5">
+          <span className="text-[11px] font-mono text-red-400">stop hive?</span>
+          <button
+            onClick={handleStop}
+            disabled={shutting}
+            className="px-2 py-0.5 text-[11px] font-mono border border-red-600 text-red-300 bg-red-950 hover:bg-red-900 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            {shutting ? "stopping..." : "yes"}
+          </button>
+          <button
+            onClick={() => setConfirmStop(false)}
+            className="px-2 py-0.5 text-[11px] font-mono border border-zinc-700 text-zinc-400 hover:text-zinc-200 transition-colors"
+          >
+            no
+          </button>
+        </span>
+      ) : (
+        <button
+          onClick={handleStop}
+          disabled={shutting}
+          className="px-2 py-0.5 text-[11px] font-mono border border-red-800 text-red-400 hover:bg-red-950 hover:text-red-300 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+        >
+          {shutting ? "stopping..." : "stop"}
+        </button>
+      )}
     </header>
   );
 }

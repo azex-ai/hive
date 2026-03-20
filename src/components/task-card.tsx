@@ -1,29 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import type { Task, TaskStatus } from "@/lib/types";
+import type { Task } from "@/lib/types";
 import { cn } from "@/lib/utils";
-
-const statusConfig: Record<TaskStatus, { label: string; className: string }> = {
-  pending: { label: "pending", className: "text-zinc-500" },
-  claimed: { label: "claimed", className: "text-blue-400" },
-  running: { label: "running", className: "text-blue-400" },
-  reviewing: { label: "review", className: "text-yellow-400" },
-  done: { label: "done", className: "text-green-500" },
-  evaluated: { label: "evaluated", className: "text-green-500" },
-  failed: { label: "failed", className: "text-red-400" },
-};
-
-function formatAge(ts: string): string {
-  const diff = Date.now() - new Date(ts).getTime();
-  const s = Math.floor(diff / 1000);
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h`;
-  return `${Math.floor(h / 24)}d`;
-}
+import { taskStatusConfig } from "@/lib/status";
+import { formatAge } from "@/lib/format";
 
 interface TaskRowProps {
   task: Task;
@@ -31,7 +12,7 @@ interface TaskRowProps {
 }
 
 export function TaskRow({ task, agentName }: TaskRowProps) {
-  const status = statusConfig[task.status] ?? statusConfig.pending;
+  const cfg = taskStatusConfig[task.status] ?? taskStatusConfig.pending;
   // Display title if available, else fall back to objective.
   const displayName = task.spec.title || task.spec.objective;
 
@@ -61,8 +42,8 @@ export function TaskRow({ task, agentName }: TaskRowProps) {
         </span>
 
         {/* Status badge */}
-        <span className={cn("font-mono", status.className)}>
-          [{status.label}]
+        <span className={cn("font-mono", cfg.color)}>
+          [{cfg.label.toLowerCase()}]
         </span>
 
         {/* Age */}

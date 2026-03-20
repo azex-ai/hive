@@ -5,16 +5,7 @@ import Link from "next/link";
 import { fetchTasks } from "@/lib/api";
 import type { Task } from "@/lib/types";
 import { cn } from "@/lib/utils";
-
-const statusStyle: Record<string, string> = {
-  pending: "text-zinc-500",
-  claimed: "text-blue-400",
-  running: "text-blue-400",
-  reviewing: "text-yellow-400",
-  done: "text-green-500",
-  evaluated: "text-green-500",
-  failed: "text-red-400",
-};
+import { taskStatusConfig } from "@/lib/status";
 
 export default function TasksPage() {
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -73,7 +64,7 @@ export default function TasksPage() {
             >
               <span className="text-zinc-600 truncate">{task.spec.id.slice(0, 8)}</span>
               <span className="text-zinc-300 truncate">{task.spec.objective}</span>
-              <span className={cn("font-mono", statusStyle[task.status] ?? "text-zinc-500")}>
+              <span className={cn("font-mono", taskStatusConfig[task.status]?.color ?? "text-zinc-400")}>
                 [{task.status}]
               </span>
               <span className="text-zinc-600">

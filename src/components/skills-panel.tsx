@@ -100,6 +100,7 @@ export function SkillsPanel() {
                       isOn ? "bg-green-600" : "bg-zinc-700"
                     }`}
                     title={isOn ? "enabled" : "disabled"}
+                    aria-label={`Toggle skill ${skill.name}`}
                   >
                     <span
                       className={`absolute top-0.5 w-2.5 h-2.5 rounded-full bg-zinc-100 transition-all ${

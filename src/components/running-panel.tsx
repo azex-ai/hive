@@ -4,20 +4,11 @@ import { useState } from "react";
 import Link from "next/link";
 import type { Task, TaskStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { taskStatusConfig } from "@/lib/status";
+import { formatAge } from "@/lib/format";
 
 interface RunningPanelProps {
   tasks: Task[];
-}
-
-function formatAge(ts: string): string {
-  const diff = Date.now() - new Date(ts).getTime();
-  const s = Math.floor(diff / 1000);
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h`;
-  return `${Math.floor(h / 24)}d`;
 }
 
 type FilterKey = "all" | "running" | "pending" | "done" | "failed";
@@ -39,20 +30,15 @@ function getStatusGroup(status: TaskStatus): FilterKey {
   return "done";
 }
 
-const statusDot: Record<string, { dot: string; text: string; pulse?: boolean }> = {
-  running: { dot: "bg-blue-500", text: "text-blue-400", pulse: true },
-  claimed: { dot: "bg-blue-500", text: "text-blue-400", pulse: true },
-  pending: { dot: "bg-zinc-600", text: "text-zinc-400" },
-  reviewing: { dot: "bg-yellow-500", text: "text-yellow-400" },
-  done: { dot: "bg-green-600", text: "text-green-500" },
-  evaluated: { dot: "bg-green-600", text: "text-green-500" },
-  failed: { dot: "bg-red-500", text: "text-red-400" },
-};
+function getStatusDot(status: string) {
+  const cfg = taskStatusConfig[status] ?? taskStatusConfig.pending;
+  return { dot: cfg.dot, text: cfg.color, pulse: cfg.dot.includes("animate-pulse") };
+}
 
 function TaskRow({ task }: { task: Task }) {
   const displayName = task.spec.title || task.spec.objective;
   const age = formatAge(task.updated_at);
-  const sd = statusDot[task.status] ?? statusDot.pending;
+  const sd = getStatusDot(task.status);
 
   return (
     <Link href={`/tasks/${task.spec.id}`}>
@@ -114,13 +100,15 @@ export function RunningPanel({ tasks }: RunningPanelProps) {
         </div>
 
         {/* Filter buttons */}
-        <div className="flex gap-1 flex-wrap">
+        <div className="flex gap-1 flex-wrap" role="tablist" aria-label="Task status filters">
           {filterOrder.map((f) => {
             const count = counts[f];
             const active = filter === f;
             return (
               <button
                 key={f}
+                role="tab"
+                aria-selected={active}
                 onClick={() => setFilter(f)}
                 className={cn(
                   "flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-mono border transition-colors",

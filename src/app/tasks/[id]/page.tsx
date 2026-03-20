@@ -9,16 +9,7 @@ import { ReviewPanel } from "@/components/review-panel";
 import { ApproveGate } from "@/components/approve-gate";
 import { LiveTerminal } from "@/components/live-terminal";
 import { cn } from "@/lib/utils";
-
-const statusStyle: Record<string, string> = {
-  pending: "text-zinc-500",
-  claimed: "text-blue-400",
-  running: "text-blue-400",
-  reviewing: "text-yellow-400",
-  done: "text-green-500",
-  evaluated: "text-green-500",
-  failed: "text-red-400",
-};
+import { taskStatusConfig } from "@/lib/status";
 
 function durationLabel(attempt: Attempt): string {
   if (!attempt.completed_at) return "running";
@@ -191,7 +182,7 @@ export default function TaskDetailPage({
         <span>/</span>
         <span className="text-zinc-400">{shortId}</span>
         <div className="flex-1" />
-        <span className={cn("font-mono", statusStyle[task.status] ?? "text-zinc-500")}>
+        <span className={cn("font-mono", taskStatusConfig[task.status]?.color ?? "text-zinc-400")}>
           [{task.status}]
         </span>
       </div>
@@ -227,10 +218,12 @@ export default function TaskDetailPage({
       )}
 
       {/* Tabs */}
-      <div className="flex border-b border-zinc-800">
+      <div className="flex border-b border-zinc-800" role="tablist" aria-label="Task detail tabs">
         {(["attempts", "diff", "review", "files"] as Tab[]).map((t) => (
           <button
             key={t}
+            role="tab"
+            aria-selected={tab === t}
             onClick={() => setTab(t)}
             className={cn(
               "px-4 py-2 text-[11px] font-mono border-b-2 transition-colors",

@@ -29,7 +29,10 @@ export function LiveTerminal({ taskId }: LiveTerminalProps) {
   const esRef = useRef<EventSource | null>(null);
 
   const appendLine = useCallback((text: string, kind: TerminalLine["kind"], ts?: string) => {
-    setLines((prev) => [...prev, { timestamp: formatTime(ts), text, kind }]);
+    setLines((prev) => {
+      const next = [...prev, { timestamp: formatTime(ts), text, kind }];
+      return next.length > 5000 ? next.slice(-5000) : next;
+    });
   }, []);
 
   // Load historical output from saved log file on mount.
