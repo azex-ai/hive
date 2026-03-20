@@ -6,6 +6,7 @@ import { getTask, listTasks, updateTaskStatus, createAttempt, saveAttemptBranch,
 import { getConfig, getOutputDir } from "./config";
 import { createWorktree, detachWorktree, getWorktreeDiff, detectGitRepo } from "./worktree";
 import { publishEvent } from "./events";
+import { getRuntime } from "./runtime";
 import type { Role, TaskStatus } from "./types";
 
 // Track active runs per agent
@@ -102,49 +103,41 @@ export async function runTask(taskId: string, agentName: string, role: string): 
       data: { line: `[hive] prompt length: ${prompt.length} chars` },
     });
 
-    // Run the agent using Claude Code SDK
+    // Run the agent via pluggable runtime
     let output = "";
     let exitCode = 0;
     const startTime = Date.now();
+    const runtime = getRuntime(agentName);
 
-    try {
-      const { query } = await import("@anthropic-ai/claude-code");
-
-      for await (const msg of query({
-        prompt,
-        options: {
-          abortController: new AbortController(),
-          maxTurns: 3,
-          permissionMode: "bypassPermissions" as const,
-          ...(workdir ? { cwd: workdir } : {}),
-        },
-      })) {
-        if (msg.type === "result") {
-          if (msg.subtype === "success") {
-            output = typeof msg.result === "string" ? msg.result : JSON.stringify(msg.result);
-          }
-        } else if (msg.type === "assistant" && msg.message) {
-          if (Array.isArray(msg.message.content)) {
-            for (const block of msg.message.content) {
-              if (block.type === "text") {
-                // Stream output lines
-                for (const line of block.text.split("\n")) {
-                  if (line.trim()) {
-                    publishEvent({
-                      type: "task_output",
-                      task_id: taskId,
-                      data: { line },
-                    });
-                  }
-                }
-              }
-            }
-          }
-        }
+    for await (const event of runtime.execute(prompt, {
+      workdir,
+      branch,
+      taskId,
+      attemptId,
+    })) {
+      switch (event.type) {
+        case "output":
+          publishEvent({
+            type: "task_output",
+            task_id: taskId,
+            data: { line: event.line },
+          });
+          break;
+        case "result":
+          output = event.content;
+          exitCode = event.exitCode;
+          break;
+        case "andon":
+          publishEvent({
+            type: "task_andon",
+            task_id: taskId,
+            data: { reason: event.reason },
+          });
+          break;
+        case "artifact":
+          saveArtifact(attemptId, event.artifactType, event.path);
+          break;
       }
-    } catch (err: any) {
-      output = err.message;
-      exitCode = 1;
     }
 
     const duration = Date.now() - startTime;

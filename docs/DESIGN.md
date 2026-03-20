@@ -401,3 +401,97 @@ Agent 不互相对话。它们通过共享环境协调：
 | 切换浏览器验证工具 | 换 `Verifier` 实现 | Spec, Agent, Gate |
 
 **最小改动原则**：每次扩展只动一个接口的一个实现。如果需要改两层，说明接口切错了。
+
+---
+
+## 经验规则（Failure Modes → Poka-yoke）
+
+> 以下规则全部来自真实多 agent 实验的 Critical/High 级失败。每条规则对应一个曾经发生过的事故。
+
+### R1: Spec 完整性（来源：22 个页面零 a11y）
+
+**Agent 严格执行 spec，不会主动补充 spec 没要求的东西。Spec 缺什么，产出就缺什么。**
+
+Spec 必填字段：
+- `objective` — 做什么（What）
+- `acceptance` — Given/When/Then 验收标准
+- `constraints` — 不变量、边界条件
+- `out_of_scope` — 明确排除项
+
+Gate：spec 缺任一必填字段 → 阻断 task 创建。
+
+### R2: Foundation 先行（来源：Provider 缺失 → 15 页崩溃）
+
+**tsc 通过是必要不充分条件。Foundation 必须保证 app 能启动。**
+
+Foundation Done 的标准：
+1. TypeScript 编译通过
+2. `npm run dev` 无运行时报错
+3. 首页可渲染（agent-browser 验证，不是只看 build）
+4. 所有共享模块的导出路径真实存在
+
+规则：Foundation 未通过 → 所有下游 dev task 保持 blocked。
+
+### R3: 所有权明确（来源：Sidebar href="#" 占位符无人修复）
+
+**共享资源必须有明确 Owner。无主组件 = 必然漏洞。**
+
+hive-ts 中需要明确 owner 的共享资源：
+- `layout.tsx`（Root Layout + Provider 注入）
+- `lib/types.ts`（类型定义）
+- `lib/runtime/index.ts`（Agent 注册表）
+- `hive.yaml`（全局配置）
+- `CLAUDE.md` + Skills（约束）
+
+反模式：每个 agent 各自改共享文件 → 冲突 + 遗漏。
+正确：指定一个 owner（或 Team Lead 兜底）统一处理共享文件。
+
+### R4: 验证 ≠ 编译通过（来源：类型安全但运行时崩溃）
+
+**类型安全 ≠ 语义正确。4 层验证缺一不可。**
+
+| 层 | 检查什么 | 工具 |
+|---|---|---|
+| Static | 类型 + 语法 | `tsc --noEmit` |
+| Build | 能否构建 | `npm run build` |
+| Runtime | 能否启动 + 首页渲染 | `agent-browser open + snapshot` |
+| Semantic | 验收标准是否满足 | agent-browser 对照 spec.acceptance |
+
+只过了 Static + Build 就标 done = 埋雷。
+
+### R5: 常量单一来源（来源：前后端 enum 不一致）
+
+**同一个业务概念只能在一个地方定义，其他地方引用。**
+
+hive-ts 中的高风险常量：
+- `TaskStatus` → 只在 `types.ts` 定义
+- `taskStatusConfig` → 只在 `lib/status.ts` 定义
+- Agent names → 只在 `hive.yaml` + `runtime/index.ts`
+- API response format → `{ data }` / `{ error }` 在 CLAUDE.md 约定
+
+反模式：API route 返回 `status: "success"`，前端期望 `status: "done"` → 静默失败。
+
+### R6: Agent 不猜 API（来源：agent 凭"常见模式"推断不存在的 ORM 方法）
+
+**Task 描述中必须包含精确的 API 引用，不能让 agent 猜。**
+
+自包含 task 的要求：
+- 要用什么函数 → 给出文件路径 + 函数签名
+- 要改什么文件 → 列出具体路径
+- 依赖什么接口 → 引用 types.ts 中的定义
+
+反模式：task 写"实现用户登录" → agent 猜一个不存在的 auth 库。
+正确：task 写"在 `src/app/api/auth/route.ts` 中用 `better-sqlite3` 实现 session 验证，参考 `lib/scheduler.ts` 中的 DB 访问模式"。
+
+### R7: 方向性约束必须明确（来源："保守降级"在不同上下文含义相反）
+
+**每个降级/容错策略必须明确方向。**
+
+| 场景 | Fail Closed (拒绝) | Fail Open (降级) |
+|------|---|---|
+| Agent 不可用 | 不派发 task | 用备选 agent |
+| Gate 失败 | 阻断 merge | 标记 warning 继续 |
+| Worktree 创建失败 | 任务失败 | 回退到 output dir |
+| Config 解析失败 | 拒绝启动 | 使用默认配置 |
+
+当前 hive-ts 的选择已在代码中体现（worktree 失败 → fail open 回退到 output dir），但需要在 spec 中显式声明，不能让 agent 猜。
