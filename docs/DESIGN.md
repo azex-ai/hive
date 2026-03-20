@@ -209,44 +209,10 @@ interface VerifyCheck {
 └─────────────────────────────────────────────────────┘
 ```
 
-#### agent-browser 在 Hive 中的使用模式
+#### agent-browser（Vercel）
 
-```bash
-# Agent 完成 task 后，Hive 自动执行：
-
-# 1. 启动 dev server（如果项目是 web 应用）
-# 2. 打开浏览器验证
-agent-browser open http://localhost:3000
-agent-browser wait --load networkidle
-
-# 3. 拍快照（accessibility tree，极低 token）
-agent-browser snapshot -i
-
-# 4. 对比变更前后
-agent-browser diff snapshot
-
-# 5. 针对 spec 中的验收标准逐条检查
-agent-browser find text "Sign Up" click    # 验证按钮存在
-agent-browser wait --url "**/register"     # 验证导航正确
-agent-browser snapshot -i                  # 重新快照
-
-# 6. 截图留档（给人类 reviewer 看）
-agent-browser screenshot --annotate verify-result.png
-
-# 7. 关闭
-agent-browser close
-```
-
-#### 为什么用 agent-browser 而不是 Playwright 直接写测试
-
-| | agent-browser | Playwright 测试 |
-|---|---|---|
-| Token 消耗 | accessibility tree snapshot, ~500 tokens/page | 截图 ~10K tokens/page |
-| 灵活性 | 自然语言描述意图，AI 理解 | 硬编码 selector，脆弱 |
-| 维护成本 | 零——UI 改了 AI 自动适应 | 高——selector 变了测试就挂 |
-| 适合谁 | AI agent 自验证 | 人类写的回归测试 |
-
-**两者互补**：agent-browser 做灵活的验收验证，Playwright 做稳定的回归测试。
+验证基础设施。用 accessibility tree snapshot 理解页面（~500 tokens/page vs 截图 ~10K tokens/page）。
+UI 改了 AI 自动适应，零 selector 维护成本。与 Playwright 回归测试互补。
 
 ### Layer 5: Review
 
@@ -412,13 +378,7 @@ Agent 不互相对话。它们通过共享环境协调：
 
 **Agent 严格执行 spec，不会主动补充 spec 没要求的东西。Spec 缺什么，产出就缺什么。**
 
-Spec 必填字段：
-- `objective` — 做什么（What）
-- `acceptance` — Given/When/Then 验收标准
-- `constraints` — 不变量、边界条件
-- `out_of_scope` — 明确排除项
-
-Gate：spec 缺任一必填字段 → 阻断 task 创建。
+完整模板和 gate 规则见 `spec-check` skill（`/spec-check`）。核心：objective、acceptance criteria、constraints、out_of_scope 四项缺任一 → 阻断。
 
 ### R2: Foundation 先行（来源：Provider 缺失 → 15 页崩溃）
 
