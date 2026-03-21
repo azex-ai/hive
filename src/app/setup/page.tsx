@@ -5,7 +5,38 @@ import { useRouter } from "next/navigation";
 import { fetchWorkspace, initWorkspace, fetchHealth } from "@/lib/api";
 import type { AgentHealth } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { Folder, FolderGit2, ChevronUp, ChevronRight } from "lucide-react";
+import { Folder, FolderGit2, ChevronUp, ChevronRight, GitBranch, Package, FileCode, Clock } from "lucide-react";
+
+interface BlueprintData {
+  workspace: string;
+  scannedAt: string;
+  project: {
+    type: string;
+    configFiles: string[];
+    scripts: Record<string, string>;
+    topDirs: string[];
+    deps: string[];
+    devDeps: string[];
+  };
+  git: {
+    branch: string;
+    commitHash: string;
+    commitMessage: string;
+    commitDate: string;
+    dirtyFiles: number;
+  } | null;
+  checkpoint: {
+    commitHash: string;
+    createdAt: string;
+    summary: string;
+    completedTasks: string[];
+  } | null;
+  sessions: Array<{
+    startedAt: string;
+    summary: string;
+    tasksCompleted: string[];
+  }>;
+}
 
 interface BrowseDir {
   name: string;
@@ -27,6 +58,7 @@ export default function SetupPage() {
   const [initResult, setInitResult] = useState<{
     is_git_repo: boolean;
     status: string;
+    blueprint?: BlueprintData;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [agentHealths, setAgentHealths] = useState<AgentHealth[]>([]);
@@ -231,30 +263,120 @@ export default function SetupPage() {
           </div>
         )}
 
-        {/* Result */}
+        {/* Blueprint Result */}
         {initResult && (
-          <div className="border border-zinc-800 bg-zinc-900/50 p-4 mb-6 text-xs flex flex-col gap-2">
-            <div className="text-green-500">[ok] workspace initialized</div>
-            <div className="text-zinc-400">
-              path <span className="text-zinc-200">{repoPath}</span>
-            </div>
-            <div className="text-zinc-400">
-              git repo{" "}
-              <span className={initResult.is_git_repo ? "text-green-400" : "text-zinc-500"}>
-                {initResult.is_git_repo ? "detected" : "not found"}
-              </span>
-            </div>
-            <div className="text-zinc-400">
-              status <span className="text-zinc-200">{initResult.status}</span>
-            </div>
-            <div className="border-t border-zinc-800 mt-2 pt-2">
+          <div className="border border-zinc-800 bg-zinc-900/50 mb-6 text-xs">
+            {/* Header */}
+            <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
+              <div>
+                <span className="text-green-500">[{initResult.status}]</span>
+                <span className="text-zinc-200 ml-2">{repoPath.replace(/^\/Users\/[^/]+/, "~")}</span>
+              </div>
               <button
                 onClick={() => router.push("/")}
-                className="text-green-500 hover:text-green-400 underline underline-offset-2"
+                className="text-green-400 text-[11px] border border-green-800 px-2.5 py-1 hover:bg-green-950 transition-colors"
               >
                 go to dashboard
               </button>
             </div>
+
+            {initResult.blueprint && (
+              <div className="p-4 flex flex-col gap-3">
+                {/* Project type + config */}
+                <div className="flex items-start gap-3">
+                  <Package className="w-3.5 h-3.5 text-zinc-500 mt-0.5 shrink-0" />
+                  <div className="flex-1">
+                    <div className="text-zinc-300">
+                      {initResult.blueprint.project.type}
+                      <span className="text-zinc-600 ml-2">
+                        {initResult.blueprint.project.configFiles.join(" · ")}
+                      </span>
+                    </div>
+                    {initResult.blueprint.project.topDirs.length > 0 && (
+                      <div className="text-zinc-600 mt-1">
+                        {initResult.blueprint.project.topDirs.join("/ ")}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Dependencies summary */}
+                {initResult.blueprint.project.deps.length > 0 && (
+                  <div className="flex items-start gap-3">
+                    <FileCode className="w-3.5 h-3.5 text-zinc-500 mt-0.5 shrink-0" />
+                    <div className="text-zinc-500">
+                      {initResult.blueprint.project.deps.length} deps
+                      {initResult.blueprint.project.devDeps.length > 0 && (
+                        <span> · {initResult.blueprint.project.devDeps.length} dev</span>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Scripts */}
+                {Object.keys(initResult.blueprint.project.scripts).length > 0 && (
+                  <div className="flex items-start gap-3">
+                    <span className="text-zinc-500 mt-0.5 shrink-0 w-3.5 text-center">$</span>
+                    <div className="text-zinc-500 flex flex-wrap gap-x-3 gap-y-1">
+                      {Object.keys(initResult.blueprint.project.scripts).slice(0, 12).map((s) => (
+                        <span key={s} className="text-zinc-400">{s}</span>
+                      ))}
+                      {Object.keys(initResult.blueprint.project.scripts).length > 12 && (
+                        <span className="text-zinc-600">+{Object.keys(initResult.blueprint.project.scripts).length - 12}</span>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Git state */}
+                {initResult.blueprint.git && (
+                  <div className="flex items-start gap-3">
+                    <GitBranch className="w-3.5 h-3.5 text-zinc-500 mt-0.5 shrink-0" />
+                    <div>
+                      <span className="text-zinc-300">{initResult.blueprint.git.branch}</span>
+                      <span className="text-zinc-600 ml-2">{initResult.blueprint.git.commitHash}</span>
+                      <span className="text-zinc-500 ml-2">{initResult.blueprint.git.commitMessage}</span>
+                      {initResult.blueprint.git.dirtyFiles > 0 && (
+                        <span className="text-yellow-500 ml-2">{initResult.blueprint.git.dirtyFiles} dirty</span>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Checkpoint (if returning to workspace) */}
+                {initResult.blueprint.checkpoint && (
+                  <div className="flex items-start gap-3 border-t border-zinc-800 pt-3">
+                    <Clock className="w-3.5 h-3.5 text-green-600 mt-0.5 shrink-0" />
+                    <div>
+                      <div className="text-green-400">last checkpoint</div>
+                      <div className="text-zinc-400 mt-0.5">{initResult.blueprint.checkpoint.summary}</div>
+                      <div className="text-zinc-600 mt-0.5">
+                        {initResult.blueprint.checkpoint.commitHash}
+                        {" · "}
+                        {initResult.blueprint.checkpoint.completedTasks.length} tasks
+                        {" · "}
+                        {new Date(initResult.blueprint.checkpoint.createdAt).toLocaleDateString()}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Session history (if returning) */}
+                {initResult.blueprint.sessions.length > 0 && (
+                  <div className="flex items-start gap-3 border-t border-zinc-800 pt-3">
+                    <Clock className="w-3.5 h-3.5 text-zinc-500 mt-0.5 shrink-0" />
+                    <div>
+                      <div className="text-zinc-500">{initResult.blueprint.sessions.length} previous sessions</div>
+                      {initResult.blueprint.sessions.slice(-3).map((s, i) => (
+                        <div key={i} className="text-zinc-600 mt-0.5">
+                          {s.summary || `${s.tasksCompleted.length} tasks`}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
 

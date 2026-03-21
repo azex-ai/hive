@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getConfig } from "@/lib/config";
+import { scanWorkspace, readBlueprint } from "@/lib/blueprint";
 import fs from "fs";
 import path from "path";
 
@@ -35,17 +36,20 @@ export async function POST(req: NextRequest) {
 
   const isGitRepo = fs.existsSync(path.join(body.repo_path, ".git"));
 
-  const hiveDir = path.join(body.repo_path, ".hive");
-  fs.mkdirSync(hiveDir, { recursive: true });
-
+  // Set as current workspace
   const config = getConfig();
   config.repo = body.repo_path;
+
+  // Scan workspace and create/update blueprint
+  const blueprint = scanWorkspace(body.repo_path);
+  const isFirstTime = !readBlueprint(body.repo_path)?.checkpoint;
 
   return NextResponse.json({
     data: {
       repo_path: body.repo_path,
       is_git_repo: isGitRepo,
-      status: "initialized",
+      status: isFirstTime ? "initialized" : "resumed",
+      blueprint,
     },
   });
 }
