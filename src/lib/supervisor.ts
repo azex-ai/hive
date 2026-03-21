@@ -79,10 +79,14 @@ export async function warmSession(workspace: string): Promise<void> {
 
     const sysPrompt = buildSupervisorSystemPrompt();
 
+    const cfg = getConfig();
+    const model = cfg.supervisor?.model || "sonnet";
+
     for await (const msg of query({
       prompt: sysPrompt + "\n\nRespond with: {\"intent\":\"reply\",\"response\":\"ready\"}",
       options: {
         maxTurns: 1,
+        model,
         abortController: new AbortController(),
         permissionMode: "bypassPermissions" as const,
         cwd: workspace || undefined,
@@ -128,11 +132,15 @@ export async function* supervisorStream(prompt: string, workspace?: string): Asy
 
   const ws = workspace || getConfig().repo || "";
 
+  const config = getConfig();
+  const supervisorModel = config.supervisor?.model || "sonnet";
+
   const queryOptions: Record<string, unknown> = {
     maxTurns: 3,
+    model: supervisorModel,
     abortController: new AbortController(),
     permissionMode: "bypassPermissions" as const,
-    includePartialMessages: true, // Enable token-level streaming
+    includePartialMessages: true,
   };
 
   if (ws) {
