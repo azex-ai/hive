@@ -120,7 +120,7 @@ export default function SetupPage() {
               autoComplete="off"
             />
             <button
-              onClick={() => browseTo(repoPath.trim() || undefined)}
+              onClick={() => browseTo()}
               disabled={browseLoading}
               className="px-3 py-2 text-xs font-mono bg-zinc-900 border border-zinc-700 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 disabled:opacity-40 transition-colors"
               title="Browse directories"
@@ -140,28 +140,36 @@ export default function SetupPage() {
         {/* Directory Browser */}
         {browseOpen && browseData && (
           <div className="border border-zinc-700 bg-zinc-900 mb-4 max-h-72 flex flex-col">
-            {/* Current path + parent */}
-            <div className="flex items-center gap-2 px-3 py-2 border-b border-zinc-800 bg-zinc-950 shrink-0">
-              {browseData.parent && (
-                <button
-                  onClick={() => browseTo(browseData.parent!)}
-                  className="text-zinc-500 hover:text-zinc-300 transition-colors"
-                  title="Go up"
-                >
-                  <ChevronUp className="w-3.5 h-3.5" />
-                </button>
-              )}
-              <span className="text-zinc-400 text-xs truncate flex-1">
-                {browseData.current}
-              </span>
+            {/* Breadcrumb path — each segment is clickable */}
+            <div className="flex items-center gap-0 px-3 py-2 border-b border-zinc-800 bg-zinc-950 shrink-0 overflow-x-auto">
+              <div className="flex items-center gap-0 text-xs flex-1 min-w-0">
+                {browseData.current.split("/").filter(Boolean).map((seg, i, arr) => {
+                  const segPath = "/" + arr.slice(0, i + 1).join("/");
+                  const isLast = i === arr.length - 1;
+                  return (
+                    <span key={segPath} className="flex items-center shrink-0">
+                      {i > 0 && <span className="text-zinc-700 mx-0.5">/</span>}
+                      <button
+                        onClick={() => browseTo(segPath)}
+                        className={cn(
+                          "hover:text-green-400 transition-colors px-0.5",
+                          isLast ? "text-zinc-200" : "text-zinc-500",
+                        )}
+                      >
+                        {seg}
+                      </button>
+                    </span>
+                  );
+                })}
+              </div>
               {browseData.isGitRepo && (
-                <span className="text-green-500 text-[10px] border border-green-800 px-1.5 py-0.5 shrink-0">
+                <span className="text-green-500 text-[10px] border border-green-800 px-1.5 py-0.5 shrink-0 ml-2">
                   git
                 </span>
               )}
               <button
                 onClick={() => selectDir(browseData.current)}
-                className="text-green-400 text-[11px] hover:text-green-300 border border-green-800 px-2 py-0.5 hover:bg-green-950 transition-colors shrink-0"
+                className="text-green-400 text-[11px] hover:text-green-300 border border-green-800 px-2 py-0.5 hover:bg-green-950 transition-colors shrink-0 ml-2"
               >
                 select
               </button>
