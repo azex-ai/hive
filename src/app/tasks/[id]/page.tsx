@@ -8,6 +8,7 @@ import { DiffViewer } from "@/components/diff-viewer";
 import { ReviewPanel } from "@/components/review-panel";
 import { ApproveGate } from "@/components/approve-gate";
 import { LiveTerminal } from "@/components/live-terminal";
+import { PipelineView } from "@/components/pipeline-view";
 import { cn } from "@/lib/utils";
 import { taskStatusConfig } from "@/lib/status";
 
@@ -20,7 +21,7 @@ function durationLabel(attempt: Attempt): string {
   return `${Math.round(secs / 60)}m`;
 }
 
-type Tab = "attempts" | "diff" | "review" | "files";
+type Tab = "attempts" | "diff" | "review" | "files" | "pipeline";
 
 export default function TaskDetailPage({
   params,
@@ -219,7 +220,7 @@ export default function TaskDetailPage({
 
       {/* Tabs */}
       <div className="flex border-b border-zinc-800" role="tablist" aria-label="Task detail tabs">
-        {(["attempts", "diff", "review", "files"] as Tab[]).map((t) => (
+        {(["attempts", "diff", "review", "files", "pipeline"] as Tab[]).map((t) => (
           <button
             key={t}
             role="tab"
@@ -417,6 +418,11 @@ export default function TaskDetailPage({
                 )}
               </>
             )}
+          </div>
+        )}
+        {tab === "pipeline" && (
+          <div className="p-4">
+            <PipelineView taskId={id} />
           </div>
         )}
       </div>

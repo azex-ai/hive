@@ -2,8 +2,25 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { fetchWorkspace, fetchStatus, fetchHealth, shutdownServer } from "@/lib/api";
-import type { WorkspaceConfig, ServerStatus, AgentHealth } from "@/lib/types";
+import { fetchWorkspace, fetchStatus, fetchHealth, shutdownServer, fetchTasks } from "@/lib/api";
+import type { WorkspaceConfig, ServerStatus, AgentHealth, Task, TaskStatus } from "@/lib/types";
+
+// Pipeline-active task statuses — shown as stage breakdown instead of generic "running"
+const PIPELINE_STATUSES: TaskStatus[] = [
+  "coding", "linting", "building", "testing", "integrating", "repairing", "escalated", "paused",
+];
+
+// Short display labels for pipeline statuses
+const PIPELINE_STATUS_LABELS: Partial<Record<TaskStatus, string>> = {
+  coding: "coding",
+  linting: "linting",
+  building: "building",
+  testing: "testing",
+  integrating: "integrating",
+  repairing: "repairing",
+  escalated: "escalated",
+  paused: "paused",
+};
 
 export function TopBar() {
   const [workspace, setWorkspace] = useState<WorkspaceConfig | null>(null);
@@ -12,6 +29,21 @@ export function TopBar() {
   const [shutting, setShutting] = useState(false);
   const [confirmStop, setConfirmStop] = useState(false);
   const [agentHealths, setAgentHealths] = useState<AgentHealth[]>([]);
+  const [pipelineCounts, setPipelineCounts] = useState<Partial<Record<TaskStatus, number>>>({});
+
+  const refreshTasks = useCallback(() => {
+    fetchTasks()
+      .then((tasks: Task[]) => {
+        const counts: Partial<Record<TaskStatus, number>> = {};
+        for (const t of tasks) {
+          if (PIPELINE_STATUSES.includes(t.status)) {
+            counts[t.status] = (counts[t.status] ?? 0) + 1;
+          }
+        }
+        setPipelineCounts(counts);
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     fetchWorkspace()
@@ -25,7 +57,9 @@ export function TopBar() {
     fetchHealth()
       .then((h) => setAgentHealths(h.agents))
       .catch(() => {});
-  }, []);
+
+    refreshTasks();
+  }, [refreshTasks]);
 
   // Poll status every 5 seconds
   useEffect(() => {
@@ -36,9 +70,10 @@ export function TopBar() {
           setConnected(true);
         })
         .catch(() => setConnected(false));
+      refreshTasks();
     }, 5000);
     return () => clearInterval(id);
-  }, []);
+  }, [refreshTasks]);
 
   const handleStop = useCallback(async () => {
     if (!confirmStop) {
@@ -81,12 +116,38 @@ export function TopBar() {
       {/* Spacer */}
       <div className="flex-1" />
 
-      {/* Task counts */}
+      {/* Task counts — show pipeline stage breakdown when active */}
       {status && (
-        <span className="text-zinc-500 mr-4">
-          <span className="text-zinc-300">{status.tasks_running}</span> running
-          {" / "}
-          <span className="text-zinc-300">{status.tasks_total}</span> total
+        <span className="text-zinc-500 mr-4 flex items-center gap-1.5">
+          {(() => {
+            const activeStages = PIPELINE_STATUSES.filter((s) => (pipelineCounts[s] ?? 0) > 0);
+            if (activeStages.length > 0) {
+              return (
+                <>
+                  {activeStages.map((s, i) => (
+                    <span key={s}>
+                      <span className="text-zinc-300">{pipelineCounts[s]}</span>
+                      {" "}
+                      <span className="text-zinc-500">{PIPELINE_STATUS_LABELS[s]}</span>
+                      {i < activeStages.length - 1 && <span className="text-zinc-700 mx-0.5">·</span>}
+                    </span>
+                  ))}
+                  <span className="text-zinc-700 mx-0.5">/</span>
+                  <span className="text-zinc-300">{status.tasks_total}</span>
+                  <span className="text-zinc-500">total</span>
+                </>
+              );
+            }
+            return (
+              <>
+                <span className="text-zinc-300">{status.tasks_running}</span>
+                <span>running</span>
+                <span className="text-zinc-700">/</span>
+                <span className="text-zinc-300">{status.tasks_total}</span>
+                <span>total</span>
+              </>
+            );
+          })()}
         </span>
       )}
 
