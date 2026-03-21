@@ -49,15 +49,31 @@ export async function POST(req: NextRequest) {
     // Stream supervisor events — write status to file for frontend polling
     setChatStatus("thinking", "connecting to agent...");
     let rawOutput = "";
+    let textBuffer = "";
+    let currentTool = "";
+
     for await (const event of supervisorStream(fullPrompt)) {
-      if (event.type === "result") {
-        rawOutput = event.content;
-      } else if (event.type === "text") {
-        setChatStatus("writing", event.content.slice(0, 200));
-      } else if (event.type === "tool_use") {
-        setChatStatus("using_tool", event.content.slice(0, 200));
-      } else if (event.type === "thinking") {
-        setChatStatus("reasoning", event.content.slice(0, 200));
+      switch (event.type) {
+        case "result":
+          rawOutput = event.content;
+          break;
+        case "text":
+          textBuffer += event.content;
+          // Update status with latest text chunk (show tail)
+          setChatStatus("writing", textBuffer.slice(-200));
+          break;
+        case "thinking":
+          setChatStatus("reasoning", event.content.slice(-200));
+          break;
+        case "tool_start":
+          currentTool = event.toolName ?? event.content;
+          setChatStatus("using_tool", currentTool);
+          break;
+        case "tool_delta":
+          setChatStatus("using_tool", `${currentTool}: ${event.content.slice(0, 150)}`);
+          break;
+        case "block_stop":
+          break;
       }
     }
     setChatStatus("idle");

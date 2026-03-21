@@ -59,10 +59,11 @@ function IntentBadge({ intent }: { intent: string }) {
 
 /** Stream status labels for intermediate events */
 const STREAM_LABELS: Record<string, string> = {
-  thinking: "reasoning",
-  tool_use: "using tool",
-  tool_result: "got result",
-  text: "writing",
+  thinking: "thinking",
+  reasoning: "reasoning",
+  using_tool: "using tool",
+  writing: "writing",
+  idle: "",
 };
 
 export function ChatInput({ onTasksCreated }: ChatInputProps) {
@@ -237,16 +238,30 @@ export function ChatInput({ onTasksCreated }: ChatInputProps) {
 
         {/* Streaming status — shows real-time supervisor state */}
         {loading && (
-          <div className="flex flex-col gap-1">
+          <div className="flex flex-col gap-0.5">
             <div className="flex gap-2 leading-5 items-center">
               <span className="text-zinc-600 shrink-0 select-none">$</span>
-              <span className="text-yellow-500/80 animate-pulse">
-                {streamStatus || "thinking"}...
+              <span className={cn(
+                "text-[10px]",
+                streamStatus === "writing" ? "text-green-600" :
+                streamStatus === "reasoning" ? "text-blue-500" :
+                streamStatus === "using_tool" ? "text-yellow-500" :
+                "text-zinc-600",
+              )}>
+                {STREAM_LABELS[streamStatus] || "thinking"}
               </span>
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-yellow-500 animate-pulse" />
             </div>
             {streamDetail && (
-              <div className="ml-4 text-[10px] text-zinc-600 truncate max-w-full">
-                {streamDetail}
+              <div className={cn(
+                "ml-4 text-[11px] break-words whitespace-pre-wrap",
+                streamStatus === "writing" ? "text-zinc-400" :
+                streamStatus === "reasoning" ? "text-blue-400/60" :
+                "text-zinc-600",
+              )}>
+                {streamStatus === "writing"
+                  ? streamDetail.slice(-300)
+                  : streamDetail.slice(0, 100)}
               </div>
             )}
           </div>

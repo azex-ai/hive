@@ -11,13 +11,15 @@ let currentSessionWorkspace = "";
 
 /** Streaming event from supervisor */
 export interface SupervisorStreamEvent {
-  type: "thinking" | "text" | "tool_use" | "tool_result" | "result" | "error";
+  type: "thinking" | "text" | "tool_start" | "tool_delta" | "tool_result" | "result" | "error" | "block_stop";
   content: string;
+  /** For tool_start: tool name */
+  toolName?: string;
 }
 
 /**
- * Stream supervisor messages as they arrive.
- * Yields intermediate events (thinking, tool use, text) and a final result.
+ * Stream supervisor messages as they arrive — token by token.
+ * Uses `includePartialMessages: true` to get content_block_delta events.
  */
 export async function* supervisorStream(prompt: string, workspace?: string): AsyncGenerator<SupervisorStreamEvent> {
   const { query } = await import("@anthropic-ai/claude-code");
@@ -28,6 +30,7 @@ export async function* supervisorStream(prompt: string, workspace?: string): Asy
     maxTurns: 3,
     abortController: new AbortController(),
     permissionMode: "bypassPermissions" as const,
+    includePartialMessages: true, // Enable token-level streaming
   };
 
   if (ws) {
@@ -45,8 +48,6 @@ export async function* supervisorStream(prompt: string, workspace?: string): Asy
   let accumulated = "";
 
   for await (const msg of query(options)) {
-    const msgAny = msg as Record<string, unknown>;
-
     if (msg.type === "result") {
       if (msg.subtype === "success") {
         finalResult = typeof msg.result === "string" ? msg.result : JSON.stringify(msg.result);
@@ -55,32 +56,43 @@ export async function* supervisorStream(prompt: string, workspace?: string): Asy
         sessionByWorkspace.set(ws, msg.session_id as string);
         currentSessionWorkspace = ws;
       }
-    } else if (msg.type === "assistant" && msgAny.message) {
-      const message = msgAny.message as { content?: unknown[] };
-      if (Array.isArray(message.content)) {
+    } else if (msg.type === "stream_event") {
+      // Token-level streaming events from includePartialMessages
+      const evt = (msg as Record<string, unknown>).event as Record<string, unknown> | undefined;
+      if (!evt) continue;
+
+      if (evt.type === "content_block_start") {
+        const block = evt.content_block as Record<string, unknown> | undefined;
+        if (block?.type === "tool_use") {
+          yield { type: "tool_start", content: String(block.name ?? "tool"), toolName: String(block.name ?? "tool") };
+        }
+      } else if (evt.type === "content_block_delta") {
+        const delta = evt.delta as Record<string, unknown> | undefined;
+        if (!delta) continue;
+
+        if (delta.type === "text_delta") {
+          const text = delta.text as string;
+          accumulated += text;
+          yield { type: "text", content: text };
+        } else if (delta.type === "thinking_delta") {
+          yield { type: "thinking", content: delta.thinking as string };
+        } else if (delta.type === "input_json_delta") {
+          yield { type: "tool_delta", content: delta.partial_json as string };
+        }
+      } else if (evt.type === "content_block_stop") {
+        yield { type: "block_stop", content: "" };
+      }
+    } else if (msg.type === "assistant") {
+      // Complete assistant message — extract final text as fallback
+      const msgAny = msg as Record<string, unknown>;
+      const message = msgAny.message as { content?: unknown[] } | undefined;
+      if (message && Array.isArray(message.content)) {
         for (const block of message.content) {
           const b = block as Record<string, unknown>;
-          if (b.type === "text") {
-            accumulated += b.text as string;
-            yield { type: "text" as const, content: b.text as string };
-          } else if (b.type === "thinking") {
-            yield { type: "thinking" as const, content: (b.thinking as string) || "" };
-          } else if (b.type === "tool_use") {
-            yield { type: "tool_use" as const, content: `${b.name ?? "tool"}(${JSON.stringify(b.input ?? {}).slice(0, 200)})` };
-          } else if (b.type === "tool_result") {
-            const text = typeof b.content === "string" ? b.content : JSON.stringify(b.content ?? "");
-            yield { type: "tool_result" as const, content: text.slice(0, 500) };
+          if (b.type === "text" && !accumulated) {
+            accumulated = b.text as string;
           }
         }
-      }
-    } else if (msg.type === "stream_event") {
-      // Stream events may contain tool usage info
-      const eventData = msgAny.event as Record<string, unknown> | undefined;
-      if (eventData?.type === "tool_use") {
-        yield { type: "tool_use" as const, content: `${eventData.name ?? "tool"}(${JSON.stringify(eventData.input ?? {}).slice(0, 200)})` };
-      } else if (eventData?.type === "tool_result") {
-        const text = typeof eventData.content === "string" ? eventData.content : "";
-        yield { type: "tool_result" as const, content: text.slice(0, 500) };
       }
     }
   }

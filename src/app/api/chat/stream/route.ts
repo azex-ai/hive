@@ -70,11 +70,14 @@ export async function POST(req: NextRequest) {
             case "text":
               send("text", { content: event.content });
               break;
-            case "tool_use":
-              send("tool_use", { content: event.content });
+            case "tool_start":
+              send("tool_start", { content: event.content, toolName: event.toolName });
               break;
-            case "tool_result":
-              send("tool_result", { content: event.content });
+            case "tool_delta":
+              send("tool_delta", { content: event.content });
+              break;
+            case "block_stop":
+              send("block_stop", { content: "" });
               break;
             case "result":
               finalContent = event.content;
