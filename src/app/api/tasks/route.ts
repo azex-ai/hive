@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { listTasks, submitTasks } from "@/lib/scheduler";
+import type { TaskSpec } from "@/lib/types";
 import { getConfig } from "@/lib/config";
 import { publishEvent } from "@/lib/events";
 import { scheduleDispatch } from "@/lib/executor";
@@ -19,8 +20,19 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "invalid JSON body" }, { status: 400 });
   }
 
-  // Support both array and { specs, workspace } formats
-  const specs = Array.isArray(body) ? body : body;
+  // Support both array format [spec, ...] and object format { specs: [...] }
+  const specs = (
+    Array.isArray(body)
+      ? body
+      : Array.isArray(body?.specs)
+        ? body.specs
+        : []
+  ) as TaskSpec[];
+
+  if (specs.length === 0) {
+    return NextResponse.json({ error: "no task specs provided" }, { status: 400 });
+  }
+
   const config = getConfig();
   const workspace = config.repo ?? "";
 
