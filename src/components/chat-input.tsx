@@ -6,7 +6,7 @@ import {
   useEffect,
   type KeyboardEvent,
 } from "react";
-import { fetchChatHistory } from "@/lib/api";
+import { sendChatMessage, fetchChatHistory, connectSSE } from "@/lib/api";
 import type { ChatMessage, Task, TaskSpec } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -99,6 +99,23 @@ export function ChatInput({ onTasksCreated }: ChatInputProps) {
       .catch(() => {});
   }, []);
 
+  // Poll chat status while loading to show intermediate state
+  useEffect(() => {
+    if (!loading) return;
+    const id = setInterval(async () => {
+      try {
+        const res = await fetch("/api/chat/status");
+        const json = await res.json() as { data: { state: string; detail: string } };
+        const st = json.data.state;
+        if (st !== "idle") {
+          setStreamStatus(STREAM_LABELS[st] ?? st);
+          setStreamDetail(json.data.detail?.slice(0, 80) ?? "");
+        }
+      } catch { /* ignore */ }
+    }, 500);
+    return () => clearInterval(id);
+  }, [loading]);
+
   async function handleSend() {
     const text = input.trim();
     if (!text || loading) return;
@@ -113,48 +130,26 @@ export function ChatInput({ onTasksCreated }: ChatInputProps) {
     setMessages((prev) => [...prev, userMsg]);
     setInput("");
     setLoading(true);
-    setStreamStatus("connecting");
+    setStreamStatus("thinking");
     setStreamDetail("");
 
     try {
-      const res = await fetch("/api/chat/stream", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text }),
-      });
+      const res = await sendChatMessage(text);
 
-      if (!res.ok || !res.body) {
-        throw new Error(`HTTP ${res.status}`);
-      }
+      const assistantMsg: DisplayMessage = {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: res.response,
+        intent: res.intent,
+        taskCount: res.tasks?.length ?? 0,
+        taskId: res.task_id,
+        created_at: new Date().toISOString(),
+      };
 
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
+      setMessages((prev) => [...prev, assistantMsg]);
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-
-        // Parse SSE events from buffer
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? ""; // keep incomplete line
-
-        let eventType = "";
-        for (const line of lines) {
-          if (line.startsWith("event: ")) {
-            eventType = line.slice(7).trim();
-          } else if (line.startsWith("data: ") && eventType) {
-            try {
-              const data = JSON.parse(line.slice(6)) as Record<string, string>;
-              handleStreamEvent(eventType, data);
-            } catch {
-              // ignore malformed data
-            }
-            eventType = "";
-          }
-        }
+      if (res.tasks && res.tasks.length > 0) {
+        onTasksCreated?.(res.tasks.map(taskSpecToTask));
       }
     } catch (err) {
       const errMsg: DisplayMessage = {
@@ -170,57 +165,6 @@ export function ChatInput({ onTasksCreated }: ChatInputProps) {
       setStreamStatus("");
       setStreamDetail("");
       inputRef.current?.focus();
-    }
-  }
-
-  function handleStreamEvent(event: string, data: Record<string, string>) {
-    switch (event) {
-      case "thinking":
-        setStreamStatus("reasoning");
-        setStreamDetail(data.content?.slice(0, 80) ?? "");
-        break;
-      case "text":
-        setStreamStatus("writing");
-        setStreamDetail(data.content?.slice(0, 80) ?? "");
-        break;
-      case "tool_use":
-        setStreamStatus("using tool");
-        setStreamDetail(data.content?.slice(0, 80) ?? "");
-        break;
-      case "tool_result":
-        setStreamStatus("got result");
-        setStreamDetail(data.content?.slice(0, 80) ?? "");
-        break;
-      case "done": {
-        const assistantMsg: DisplayMessage = {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: data.response ?? "",
-          intent: data.intent,
-          taskCount: Array.isArray(data.tasks) ? (data.tasks as unknown[]).length : 0,
-          taskId: data.task_id,
-          created_at: new Date().toISOString(),
-        };
-        setMessages((prev) => [...prev, assistantMsg]);
-
-        // Handle created tasks
-        const tasks = data.tasks as unknown;
-        if (Array.isArray(tasks) && tasks.length > 0) {
-          onTasksCreated?.((tasks as TaskSpec[]).map(taskSpecToTask));
-        }
-        break;
-      }
-      case "error": {
-        const errMsg: DisplayMessage = {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: `error: ${data.error ?? "unknown"}`,
-          intent: "reply",
-          created_at: new Date().toISOString(),
-        };
-        setMessages((prev) => [...prev, errMsg]);
-        break;
-      }
     }
   }
 

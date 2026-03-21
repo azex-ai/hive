@@ -45,6 +45,8 @@ export async function* supervisorStream(prompt: string, workspace?: string): Asy
   let accumulated = "";
 
   for await (const msg of query(options)) {
+    const msgAny = msg as Record<string, unknown>;
+
     if (msg.type === "result") {
       if (msg.subtype === "success") {
         finalResult = typeof msg.result === "string" ? msg.result : JSON.stringify(msg.result);
@@ -53,23 +55,32 @@ export async function* supervisorStream(prompt: string, workspace?: string): Asy
         sessionByWorkspace.set(ws, msg.session_id as string);
         currentSessionWorkspace = ws;
       }
-    } else if (msg.type === "assistant" && msg.message) {
-      if (Array.isArray(msg.message.content)) {
-        for (const block of msg.message.content) {
-          if (block.type === "text") {
-            accumulated += block.text;
-            yield { type: "text", content: block.text };
-          } else if (block.type === "thinking") {
-            yield { type: "thinking", content: (block as Record<string, string>).thinking || "" };
-          } else if (block.type === "tool_use") {
-            const tb = block as Record<string, unknown>;
-            yield { type: "tool_use", content: `${tb.name ?? "tool"}(${JSON.stringify(tb.input ?? {}).slice(0, 200)})` };
-          } else if (block.type === "tool_result") {
-            const tb = block as Record<string, unknown>;
-            const text = typeof tb.content === "string" ? tb.content : JSON.stringify(tb.content ?? "");
-            yield { type: "tool_result", content: text.slice(0, 500) };
+    } else if (msg.type === "assistant" && msgAny.message) {
+      const message = msgAny.message as { content?: unknown[] };
+      if (Array.isArray(message.content)) {
+        for (const block of message.content) {
+          const b = block as Record<string, unknown>;
+          if (b.type === "text") {
+            accumulated += b.text as string;
+            yield { type: "text" as const, content: b.text as string };
+          } else if (b.type === "thinking") {
+            yield { type: "thinking" as const, content: (b.thinking as string) || "" };
+          } else if (b.type === "tool_use") {
+            yield { type: "tool_use" as const, content: `${b.name ?? "tool"}(${JSON.stringify(b.input ?? {}).slice(0, 200)})` };
+          } else if (b.type === "tool_result") {
+            const text = typeof b.content === "string" ? b.content : JSON.stringify(b.content ?? "");
+            yield { type: "tool_result" as const, content: text.slice(0, 500) };
           }
         }
+      }
+    } else if (msg.type === "stream_event") {
+      // Stream events may contain tool usage info
+      const eventData = msgAny.event as Record<string, unknown> | undefined;
+      if (eventData?.type === "tool_use") {
+        yield { type: "tool_use" as const, content: `${eventData.name ?? "tool"}(${JSON.stringify(eventData.input ?? {}).slice(0, 200)})` };
+      } else if (eventData?.type === "tool_result") {
+        const text = typeof eventData.content === "string" ? eventData.content : "";
+        yield { type: "tool_result" as const, content: text.slice(0, 500) };
       }
     }
   }

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { v4 as uuidv4 } from "uuid";
 import {
-  supervisorSend,
+  supervisorStream,
   buildSupervisorSystemPrompt,
   extractSupervisorEnvelope,
 } from "@/lib/supervisor";
@@ -10,6 +10,7 @@ import { getConfig } from "@/lib/config";
 import { runTask, scheduleDispatch } from "@/lib/executor";
 import { publishEvent } from "@/lib/events";
 import { addChatMessage, getChatHistory } from "@/lib/chat-store";
+import { setChatStatus } from "@/lib/chat-status";
 import type { ChatMessage } from "@/lib/types";
 
 export async function POST(req: NextRequest) {
@@ -45,7 +46,22 @@ export async function POST(req: NextRequest) {
     sysPrompt + "\n\nConversation history:\n" + historyLines.join("\n");
 
   try {
-    const rawOutput = await supervisorSend(fullPrompt);
+    // Stream supervisor events — write status to file for frontend polling
+    setChatStatus("thinking", "connecting to agent...");
+    let rawOutput = "";
+    for await (const event of supervisorStream(fullPrompt)) {
+      if (event.type === "result") {
+        rawOutput = event.content;
+      } else if (event.type === "text") {
+        setChatStatus("writing", event.content.slice(0, 200));
+      } else if (event.type === "tool_use") {
+        setChatStatus("using_tool", event.content.slice(0, 200));
+      } else if (event.type === "thinking") {
+        setChatStatus("reasoning", event.content.slice(0, 200));
+      }
+    }
+    setChatStatus("idle");
+
     const env = extractSupervisorEnvelope(rawOutput);
     if (!env.response) env.response = rawOutput.trim() || "(no response)";
 
