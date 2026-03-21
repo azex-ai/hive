@@ -1,9 +1,24 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { fetchWorkspace, initWorkspace, fetchHealth } from "@/lib/api";
 import type { AgentHealth } from "@/lib/types";
+import { cn } from "@/lib/utils";
+import { Folder, FolderGit2, ChevronUp, ChevronRight } from "lucide-react";
+
+interface BrowseDir {
+  name: string;
+  path: string;
+  isGitRepo: boolean;
+}
+
+interface BrowseResult {
+  current: string;
+  parent: string | null;
+  isGitRepo: boolean;
+  dirs: BrowseDir[];
+}
 
 export default function SetupPage() {
   const router = useRouter();
@@ -17,6 +32,11 @@ export default function SetupPage() {
   const [agentHealths, setAgentHealths] = useState<AgentHealth[]>([]);
   const [outputDir, setOutputDir] = useState<string>("");
   const [healthLoading, setHealthLoading] = useState(true);
+
+  // Directory browser state
+  const [browseOpen, setBrowseOpen] = useState(false);
+  const [browseData, setBrowseData] = useState<BrowseResult | null>(null);
+  const [browseLoading, setBrowseLoading] = useState(false);
 
   useEffect(() => {
     fetchWorkspace()
@@ -34,14 +54,35 @@ export default function SetupPage() {
       .finally(() => setHealthLoading(false));
   }, []);
 
+  const browseTo = useCallback(async (dir?: string) => {
+    setBrowseLoading(true);
+    try {
+      const params = dir ? `?dir=${encodeURIComponent(dir)}` : "";
+      const res = await fetch(`/api/workspace/browse${params}`);
+      const json = await res.json();
+      if (json.error) throw new Error(json.error);
+      setBrowseData(json.data);
+      setBrowseOpen(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "browse failed");
+    } finally {
+      setBrowseLoading(false);
+    }
+  }, []);
+
+  function selectDir(dirPath: string) {
+    setRepoPath(dirPath);
+    setBrowseOpen(false);
+  }
+
   async function handleInit() {
-    const path = repoPath.trim();
-    if (!path) return;
+    const trimmed = repoPath.trim();
+    if (!trimmed) return;
     setLoading(true);
     setError(null);
     setInitResult(null);
     try {
-      const result = await initWorkspace(path);
+      const result = await initWorkspace(trimmed);
       setInitResult(result);
     } catch (err) {
       setError(err instanceof Error ? err.message : "initialization failed");
@@ -62,10 +103,9 @@ export default function SetupPage() {
           </div>
         </div>
 
-        {/* Separator */}
         <div className="border-t border-zinc-800 mb-6" />
 
-        {/* Input */}
+        {/* Input + Browse */}
         <div className="flex flex-col gap-2 mb-4">
           <label className="text-zinc-400 text-xs">project directory</label>
           <div className="flex gap-2">
@@ -74,20 +114,107 @@ export default function SetupPage() {
               value={repoPath}
               onChange={(e) => setRepoPath(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleInit()}
-              placeholder="/Users/aaron/azex/azex"
+              placeholder="/path/to/your/project"
               className="flex-1 bg-zinc-900 border border-zinc-700 text-zinc-200 text-xs px-3 py-2 font-mono placeholder:text-zinc-600 focus:outline-none focus:border-green-700 focus:ring-1 focus:ring-green-800"
               spellCheck={false}
               autoComplete="off"
             />
             <button
+              onClick={() => browseTo(repoPath.trim() || undefined)}
+              disabled={browseLoading}
+              className="px-3 py-2 text-xs font-mono bg-zinc-900 border border-zinc-700 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 disabled:opacity-40 transition-colors"
+              title="Browse directories"
+            >
+              <Folder className="w-3.5 h-3.5" />
+            </button>
+            <button
               onClick={handleInit}
               disabled={loading || !repoPath.trim()}
               className="px-4 py-2 text-xs font-mono bg-green-950 border border-green-700 text-green-400 hover:bg-green-900 hover:text-green-300 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
             >
-              {loading ? "initializing..." : "initialize hive"}
+              {loading ? "initializing..." : "initialize"}
             </button>
           </div>
         </div>
+
+        {/* Directory Browser */}
+        {browseOpen && browseData && (
+          <div className="border border-zinc-700 bg-zinc-900 mb-4 max-h-72 flex flex-col">
+            {/* Current path + parent */}
+            <div className="flex items-center gap-2 px-3 py-2 border-b border-zinc-800 bg-zinc-950 shrink-0">
+              {browseData.parent && (
+                <button
+                  onClick={() => browseTo(browseData.parent!)}
+                  className="text-zinc-500 hover:text-zinc-300 transition-colors"
+                  title="Go up"
+                >
+                  <ChevronUp className="w-3.5 h-3.5" />
+                </button>
+              )}
+              <span className="text-zinc-400 text-xs truncate flex-1">
+                {browseData.current}
+              </span>
+              {browseData.isGitRepo && (
+                <span className="text-green-500 text-[10px] border border-green-800 px-1.5 py-0.5 shrink-0">
+                  git
+                </span>
+              )}
+              <button
+                onClick={() => selectDir(browseData.current)}
+                className="text-green-400 text-[11px] hover:text-green-300 border border-green-800 px-2 py-0.5 hover:bg-green-950 transition-colors shrink-0"
+              >
+                select
+              </button>
+            </div>
+
+            {/* Directory list */}
+            <div className="overflow-y-auto flex-1">
+              {browseData.dirs.length === 0 ? (
+                <div className="text-zinc-600 text-xs px-3 py-4 text-center">
+                  no subdirectories
+                </div>
+              ) : (
+                browseData.dirs.map((d) => (
+                  <button
+                    key={d.path}
+                    onClick={() => browseTo(d.path)}
+                    onDoubleClick={() => selectDir(d.path)}
+                    className={cn(
+                      "w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left hover:bg-zinc-800 transition-colors group",
+                      d.isGitRepo && "bg-zinc-800/30",
+                    )}
+                  >
+                    {d.isGitRepo ? (
+                      <FolderGit2 className="w-3.5 h-3.5 text-green-500 shrink-0" />
+                    ) : (
+                      <Folder className="w-3.5 h-3.5 text-zinc-600 shrink-0" />
+                    )}
+                    <span
+                      className={cn(
+                        "truncate",
+                        d.isGitRepo ? "text-green-400" : "text-zinc-400",
+                      )}
+                    >
+                      {d.name}
+                    </span>
+                    <ChevronRight className="w-3 h-3 text-zinc-700 ml-auto shrink-0 opacity-0 group-hover:opacity-100" />
+                    {d.isGitRepo && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          selectDir(d.path);
+                        }}
+                        className="text-[10px] text-green-500 border border-green-800 px-1.5 py-0.5 hover:bg-green-950 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                      >
+                        select
+                      </button>
+                    )}
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Error */}
         {error && (
@@ -101,8 +228,7 @@ export default function SetupPage() {
           <div className="border border-zinc-800 bg-zinc-900/50 p-4 mb-6 text-xs flex flex-col gap-2">
             <div className="text-green-500">[ok] workspace initialized</div>
             <div className="text-zinc-400">
-              path{" "}
-              <span className="text-zinc-200">{repoPath}</span>
+              path <span className="text-zinc-200">{repoPath}</span>
             </div>
             <div className="text-zinc-400">
               git repo{" "}
@@ -111,8 +237,7 @@ export default function SetupPage() {
               </span>
             </div>
             <div className="text-zinc-400">
-              status{" "}
-              <span className="text-zinc-200">{initResult.status}</span>
+              status <span className="text-zinc-200">{initResult.status}</span>
             </div>
             <div className="border-t border-zinc-800 mt-2 pt-2">
               <button
