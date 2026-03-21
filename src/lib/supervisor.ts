@@ -5,26 +5,30 @@ import { getConfig } from "./config";
 import { extractJSON } from "./json-extract";
 import { readBlueprint } from "./blueprint";
 
-// Session state
-let supervisorSessionId: string | null = null;
+// Session state — per workspace
+const sessionByWorkspace = new Map<string, string>();
+let currentSessionWorkspace = "";
 
-export async function supervisorSend(prompt: string, workdir?: string): Promise<string> {
+export async function supervisorSend(prompt: string, workspace?: string): Promise<string> {
   // Dynamic import since @anthropic-ai/claude-code is ESM
   const { query } = await import("@anthropic-ai/claude-code");
 
-  const queryOptions: any = {
+  const ws = workspace || getConfig().repo || "";
+
+  const queryOptions: Record<string, unknown> = {
     maxTurns: 1,
     abortController: new AbortController(),
     permissionMode: "bypassPermissions" as const,
   };
 
-  if (workdir) {
-    queryOptions.cwd = workdir;
+  if (ws) {
+    queryOptions.cwd = ws;
   }
 
-  // Resume session if we have one (this is the key perf improvement)
-  if (supervisorSessionId) {
-    queryOptions.resume = supervisorSessionId;
+  // Resume session only if same workspace
+  const existingSession = sessionByWorkspace.get(ws);
+  if (existingSession) {
+    queryOptions.resume = existingSession;
   }
 
   const options = { prompt, options: queryOptions };
@@ -38,10 +42,10 @@ export async function supervisorSend(prompt: string, workdir?: string): Promise<
         finalResult = typeof msg.result === "string" ? msg.result : JSON.stringify(msg.result);
       }
       if (msg.session_id) {
-        supervisorSessionId = msg.session_id;
+        sessionByWorkspace.set(ws, msg.session_id as string);
+        currentSessionWorkspace = ws;
       }
     } else if (msg.type === "assistant" && msg.message) {
-      // Accumulate text from content blocks as fallback
       if (Array.isArray(msg.message.content)) {
         for (const block of msg.message.content) {
           if (block.type === "text") {
@@ -52,8 +56,16 @@ export async function supervisorSend(prompt: string, workdir?: string): Promise<
     }
   }
 
-  // Prefer final result; fall back to accumulated streaming text
   return finalResult || accumulated;
+}
+
+/** Reset supervisor session for a workspace (called on workspace switch) */
+export function resetSupervisorSession(workspace?: string): void {
+  if (workspace) {
+    sessionByWorkspace.delete(workspace);
+  } else {
+    sessionByWorkspace.clear();
+  }
 }
 
 export function buildSupervisorSystemPrompt(): string {

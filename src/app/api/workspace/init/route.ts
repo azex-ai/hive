@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getConfig } from "@/lib/config";
 import { scanWorkspace, readBlueprint } from "@/lib/blueprint";
+import { setActiveWorkspace } from "@/lib/chat-store";
+import { resetSupervisorSession } from "@/lib/supervisor";
 import fs from "fs";
 import path from "path";
 
@@ -36,9 +38,16 @@ export async function POST(req: NextRequest) {
 
   const isGitRepo = fs.existsSync(path.join(body.repo_path, ".git"));
 
-  // Set as current workspace
+  // Set as current workspace + reset session state
   const config = getConfig();
+  const previousWorkspace = config.repo;
   config.repo = body.repo_path;
+
+  // Isolate: switch chat history and reset supervisor session
+  setActiveWorkspace(body.repo_path);
+  if (previousWorkspace !== body.repo_path) {
+    resetSupervisorSession(previousWorkspace);
+  }
 
   // Scan workspace and create/update blueprint
   const blueprint = scanWorkspace(body.repo_path);
