@@ -1,5 +1,9 @@
 // Task lifecycle
-export type TaskStatus = "pending" | "claimed" | "running" | "done" | "reviewing" | "evaluated" | "failed";
+export type TaskStatus =
+  | "pending" | "claimed" | "running" | "done"
+  | "reviewing" | "evaluated" | "failed"
+  | "decomposed" | "coding" | "linting" | "building"
+  | "testing" | "integrating" | "repairing" | "escalated" | "paused";
 export type Role = "writer" | "reviewer" | "tester" | "fixer";
 export type ArtifactType = "diff" | "test_result" | "review" | "coverage" | "log";
 export type Severity = "critical" | "warning" | "nit";
@@ -114,6 +118,7 @@ export interface HiveConfig {
   worktree?: { base_dir?: string; cleanup_on_merge?: boolean };
   context?: { skills_dir?: string; rules_dir?: string; templates_dir?: string };
   api?: { backend_addr?: string; frontend_addr?: string };
+  pipeline?: PipelineConfig;
 }
 
 export interface AgentHealth {
@@ -195,4 +200,93 @@ export interface Skill {
 export interface SkillsResponse {
   skills_dir: string;
   skills: Skill[];
+}
+
+// --- Pipeline Automation ---
+
+export type PipelineStage = "design" | "code" | "lint" | "build" | "test" | "review" | "integrate";
+export type PipelineStageStatus = "pending" | "running" | "passed" | "failed" | "skipped";
+export type RepairOutcome = "fixed" | "still_failing" | "escalated";
+export type ModelTier = "opus" | "sonnet" | "haiku";
+export type AgentRole = "executor" | "reviewer" | "architect" | "repairer";
+
+export interface GateEvidence {
+  command: string;
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  truncated: boolean;
+}
+
+export interface GateFinding {
+  severity: Severity;
+  file?: string;
+  line?: number;
+  message: string;
+  suggestion?: string;
+}
+
+export interface GateResult {
+  passed: boolean;
+  verdict: "pass" | "fail" | "warn";
+  evidence: GateEvidence[];
+  findings: GateFinding[];
+  durationMs: number;
+}
+
+export interface StageRecord {
+  id: number;
+  taskId: string;
+  stage: PipelineStage;
+  status: PipelineStageStatus;
+  agent?: string;
+  model?: string;
+  startedAt?: string;
+  finishedAt?: string;
+  durationMs?: number;
+  inputHash?: string;
+  outputHash?: string;
+  gateReport?: GateResult;
+}
+
+export interface RepairRecord {
+  id: number;
+  stageId: number;
+  round: number;
+  agent: string;
+  model?: string;
+  fixSummary?: string;
+  gateReport?: GateResult;
+  outcome: RepairOutcome;
+  startedAt?: string;
+  finishedAt?: string;
+  durationMs?: number;
+}
+
+export interface PipelineStatus {
+  taskId: string;
+  currentStage: PipelineStage | null;
+  stages: StageRecord[];
+  repairs: RepairRecord[];
+  paused: boolean;
+  escalated: boolean;
+}
+
+export interface ModelSelection {
+  model: ModelTier;
+  source: "default" | "benchmark";
+  score?: number;
+  reason: string;
+}
+
+export interface PipelineConfig {
+  max_repair_rounds: number;
+  self_review_probability: number;
+  parallel_max: number;
+  gates: PipelineStage[];
+  model_routing: {
+    default: Record<string, ModelTier>;
+    benchmark_min_samples: number;
+    benchmark_window_days: number;
+  };
 }

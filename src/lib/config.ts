@@ -23,6 +23,17 @@ export function loadConfig(configPath?: string): HiveConfig {
       supervisor: { agent: "claude", model: "sonnet" },
       scheduler: { lease_ttl: "30m", max_attempts: 3 },
       evaluation: { cross_review: true, max_review_rounds: 3, auto_merge_threshold: 2 },
+      pipeline: {
+        max_repair_rounds: 3,
+        self_review_probability: 0.2,
+        parallel_max: 3,
+        gates: ["lint", "build", "test", "review", "integrate"],
+        model_routing: {
+          default: { design: "opus", code: "sonnet", review: "opus", repair: "sonnet" },
+          benchmark_min_samples: 5,
+          benchmark_window_days: 30,
+        },
+      },
     };
     return _config;
   }
@@ -37,6 +48,19 @@ export function loadConfig(configPath?: string): HiveConfig {
   // Apply defaults
   if (!_config.output_dir) _config.output_dir = "./output";
   if (!_config.agents) _config.agents = {};
+  if (!_config.pipeline) {
+    _config.pipeline = {
+      max_repair_rounds: 3,
+      self_review_probability: 0.2,
+      parallel_max: 3,
+      gates: ["lint", "build", "test", "review", "integrate"],
+      model_routing: {
+        default: { design: "opus", code: "sonnet", review: "opus", repair: "sonnet" },
+        benchmark_min_samples: 5,
+        benchmark_window_days: 30,
+      },
+    };
+  }
 
   return _config;
 }
