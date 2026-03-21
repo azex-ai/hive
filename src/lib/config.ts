@@ -42,7 +42,7 @@ export function loadConfig(configPath?: string): HiveConfig {
         claude: { command: "claude", args: ["-p", "--output-format", "stream-json"], max_concurrent: 3 },
         codex: { command: "codex", args: ["exec", "--json", "-q"], max_concurrent: 2 },
       },
-      supervisor: { agent: "claude", model: "sonnet" },
+      supervisor: { agent: "claude", model: "opus" },
       scheduler: { lease_ttl: "30m", max_attempts: 3 },
       evaluation: { cross_review: true, max_review_rounds: 3, auto_merge_threshold: 2 },
       pipeline: {
