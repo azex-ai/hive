@@ -6,6 +6,28 @@ import type { HiveConfig } from "./types";
 
 let _config: HiveConfig | null = null;
 
+// --- Active Workspace (persisted to data/workspace.txt) ---
+
+const WORKSPACE_FILE = path.resolve("data", "workspace.txt");
+
+export function getActiveWorkspacePath(): string {
+  try {
+    if (fs.existsSync(WORKSPACE_FILE)) {
+      return fs.readFileSync(WORKSPACE_FILE, "utf-8").trim();
+    }
+  } catch { /* ignore */ }
+  return "";
+}
+
+export function setActiveWorkspacePath(workspace: string): void {
+  const dir = path.dirname(WORKSPACE_FILE);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(WORKSPACE_FILE, workspace, "utf-8");
+  // Also update in-memory config
+  const config = getConfig();
+  config.repo = workspace;
+}
+
 export function loadConfig(configPath?: string): HiveConfig {
   if (_config) return _config;
 
@@ -66,7 +88,13 @@ export function loadConfig(configPath?: string): HiveConfig {
 }
 
 export function getConfig(): HiveConfig {
-  return _config || loadConfig();
+  const config = _config || loadConfig();
+  // Override repo with persisted workspace if set
+  const persisted = getActiveWorkspacePath();
+  if (persisted) {
+    config.repo = persisted;
+  }
+  return config;
 }
 
 export function getOutputDir(): string {
