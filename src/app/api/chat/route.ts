@@ -47,7 +47,7 @@ export async function POST(req: NextRequest) {
   try {
     const rawOutput = await supervisorSend(fullPrompt);
     const env = extractSupervisorEnvelope(rawOutput);
-    if (!env.response) env.response = "(no response)";
+    if (!env.response) env.response = rawOutput.trim() || "(no response)";
 
     // Save assistant message
     addChatMessage({

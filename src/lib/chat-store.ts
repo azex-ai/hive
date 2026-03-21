@@ -1,27 +1,21 @@
 import "server-only";
 import type { ChatMessage } from "./types";
+import { getActiveWorkspacePath } from "./config";
 
 /** Chat history per workspace. Key = workspace path, value = messages */
 const historyByWorkspace = new Map<string, ChatMessage[]>();
 
-/** Currently active workspace for chat */
-let activeWorkspace = "";
-
-export function setActiveWorkspace(workspace: string): void {
-  activeWorkspace = workspace;
-}
-
-export function getActiveWorkspace(): string {
-  return activeWorkspace;
+function currentWorkspace(): string {
+  return getActiveWorkspacePath() || "";
 }
 
 export function getChatHistory(workspace?: string): ChatMessage[] {
-  const ws = workspace ?? activeWorkspace;
+  const ws = workspace ?? currentWorkspace();
   return [...(historyByWorkspace.get(ws) ?? [])];
 }
 
 export function addChatMessage(msg: ChatMessage, workspace?: string): void {
-  const ws = workspace ?? activeWorkspace;
+  const ws = workspace ?? currentWorkspace();
   if (!historyByWorkspace.has(ws)) {
     historyByWorkspace.set(ws, []);
   }
@@ -35,6 +29,6 @@ export function addChatMessage(msg: ChatMessage, workspace?: string): void {
 
 /** Clear chat history for a workspace */
 export function clearChatHistory(workspace?: string): void {
-  const ws = workspace ?? activeWorkspace;
+  const ws = workspace ?? currentWorkspace();
   historyByWorkspace.delete(ws);
 }

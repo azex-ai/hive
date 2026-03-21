@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getConfig, setActiveWorkspacePath } from "@/lib/config";
 import { scanWorkspace, readBlueprint } from "@/lib/blueprint";
-import { setActiveWorkspace } from "@/lib/chat-store";
+import { clearChatHistory } from "@/lib/chat-store";
 import { resetSupervisorSession } from "@/lib/supervisor";
 import fs from "fs";
 import path from "path";
@@ -43,8 +43,7 @@ export async function POST(req: NextRequest) {
   const previousWorkspace = config.repo;
   setActiveWorkspacePath(body.repo_path);
 
-  // Isolate: switch chat history and reset supervisor session
-  setActiveWorkspace(body.repo_path);
+  // Isolate: reset supervisor session on workspace switch
   if (previousWorkspace !== body.repo_path) {
     resetSupervisorSession(previousWorkspace);
   }

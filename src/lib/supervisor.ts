@@ -16,7 +16,7 @@ export async function supervisorSend(prompt: string, workspace?: string): Promis
   const ws = workspace || getConfig().repo || "";
 
   const queryOptions: Record<string, unknown> = {
-    maxTurns: 1,
+    maxTurns: 3,
     abortController: new AbortController(),
     permissionMode: "bypassPermissions" as const,
   };
