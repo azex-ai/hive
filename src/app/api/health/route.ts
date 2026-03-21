@@ -4,7 +4,7 @@ import { checkAllAgents } from "@/lib/agents";
 
 export async function GET() {
   const config = getConfig();
-  const agents = checkAllAgents(config.agents || {});
+  const agents = await checkAllAgents(config.agents || {});
   return NextResponse.json({
     data: {
       agents,

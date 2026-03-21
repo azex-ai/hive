@@ -1,5 +1,5 @@
 import "server-only";
-import type { TaskSpec, Role } from "./types";
+import type { TaskSpec, Role, GateResult as PipelineGateResult } from "./types";
 
 export function compile(spec: TaskSpec, agent: string, role: Role): string {
   switch (agent) {
@@ -66,6 +66,47 @@ If there are no findings, return an empty findings array and verdict "pass".`;
 
   prompt += "\n## Instructions\nImplement the objective above. Follow all constraints exactly. Produce the listed output files.\n";
   return prompt;
+}
+
+export function compileRepairPrompt(
+  spec: TaskSpec,
+  failedGate: string,
+  gateResult: PipelineGateResult,
+  round: number,
+): string {
+  const findingsList = gateResult.findings
+    .map(
+      (f) =>
+        `- [${f.severity}] ${f.file ? `${f.file}${f.line ? `:${f.line}` : ""}` : ""}: ${f.message}${f.suggestion ? ` (suggestion: ${f.suggestion})` : ""}`,
+    )
+    .join("\n");
+
+  const evidenceList = gateResult.evidence
+    .map((e) => `Command: ${e.command}\nExit code: ${e.exitCode}\n${e.stderr || e.stdout}`)
+    .join("\n---\n");
+
+  return `# Repair Task (Round ${round})
+
+## Original Task
+**ID**: ${spec.id}
+**Objective**: ${spec.objective}
+
+## Failed Quality Gate: ${failedGate}
+
+### Findings
+${findingsList || "(no structured findings)"}
+
+### Command Evidence
+${evidenceList || "(no command evidence)"}
+
+## Instructions
+Fix the issues identified by the ${failedGate} gate above.
+- Focus ONLY on fixing the reported issues
+- Do NOT refactor unrelated code
+- Do NOT add features beyond what's needed to pass the gate
+- After fixing, the ${failedGate} gate will be re-run automatically
+${round > 1 ? `\nThis is repair round ${round}. Previous repair attempts did not fully resolve the issues. Try a different approach.` : ""}
+`;
 }
 
 function compileCodex(spec: TaskSpec, role: Role): string {

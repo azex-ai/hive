@@ -7,6 +7,7 @@ import { getConfig, getOutputDir } from "./config";
 import { createWorktree, detachWorktree, getWorktreeDiff, detectGitRepo } from "./worktree";
 import { publishEvent } from "./events";
 import { getRuntime } from "./runtime";
+import { runPipeline } from "./pipeline/orchestrator";
 import type { Role, TaskStatus } from "./types";
 
 // Track active runs per agent
@@ -142,7 +143,6 @@ export async function runTask(taskId: string, agentName: string, role: string): 
 
     const duration = Date.now() - startTime;
     const success = exitCode === 0;
-    const finalStatus: TaskStatus = success ? "done" : "failed";
 
     if (!success) {
       publishEvent({
@@ -182,18 +182,49 @@ export async function runTask(taskId: string, agentName: string, role: string): 
     // Save session history
     appendTaskSession(taskId, `Prompt: ${prompt}`, `Output: ${output}`);
 
-    // Update attempt + task status
+    // Update attempt status
     completeAttempt(attemptId, success ? "done" : "failed");
-    updateTaskStatus(taskId, finalStatus);
 
-    publishEvent({
-      type: success ? "task_complete" : "task_error",
-      task_id: taskId,
-      data: { status: finalStatus, exit_code: String(exitCode), branch: branch || undefined },
-    });
+    if (success && workdir && branch) {
+      // Enter pipeline: run through quality gates automatically
+      publishEvent({
+        type: "task_output",
+        task_id: taskId,
+        data: { line: "[hive] agent completed, entering pipeline..." },
+      });
+
+      // Run pipeline (don't await in finally block — let executor return)
+      runPipeline(taskId, workdir, branch, "main").catch((err: unknown) => {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        console.error(`[hive] pipeline error for ${taskId}:`, errMsg);
+        updateTaskStatus(taskId, "failed");
+        publishEvent({
+          type: "pipeline_error",
+          task_id: taskId,
+          data: { error: errMsg },
+        });
+      });
+    } else if (success) {
+      // No worktree/branch — skip pipeline, mark done directly
+      updateTaskStatus(taskId, "done");
+      publishEvent({
+        type: "task_complete",
+        task_id: taskId,
+        data: { status: "done", exit_code: "0" },
+      });
+    } else {
+      // Agent failed
+      updateTaskStatus(taskId, "failed");
+      publishEvent({
+        type: "task_error",
+        task_id: taskId,
+        data: { status: "failed", exit_code: String(exitCode), branch: branch || undefined },
+      });
+    }
 
     // Detach worktree dir but KEEP the branch for review/merge
-    if (branch && repoRoot) {
+    // (only if NOT entering pipeline — pipeline needs the workdir)
+    if (!success && branch && repoRoot) {
       try {
         const baseDir = config.worktree?.base_dir || path.join(repoRoot, ".hive/worktrees");
         detachWorktree(repoRoot, baseDir, branch);
