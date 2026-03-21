@@ -1,8 +1,9 @@
 import "server-only";
-import type { SupervisorEnvelope, TaskSpec, Task } from "./types";
+import type { SupervisorEnvelope } from "./types";
 import { listTasks } from "./scheduler";
 import { getConfig } from "./config";
 import { extractJSON } from "./json-extract";
+import { readBlueprint } from "./blueprint";
 
 // Session state
 let supervisorSessionId: string | null = null;
@@ -57,27 +58,62 @@ export async function supervisorSend(prompt: string, workdir?: string): Promise<
 
 export function buildSupervisorSystemPrompt(): string {
   const config = getConfig();
-  const repoPath = config.repo || "(not configured)";
+  const workspace = config.repo || "";
+  const repoPath = workspace || "(not configured)";
 
   const agentNames =
     Object.keys(config.agents || {})
       .map((n) => `${n} (ok)`)
       .join(", ") || "none configured";
 
-  const tasks = listTasks();
+  // Workspace-scoped tasks
+  const tasks = listTasks(workspace);
   const running = tasks
-    .filter((t) => t.status === "running" || t.status === "claimed")
-    .map((t) => `${t.spec.id} (${t.spec.title || t.spec.objective.slice(0, 40)})`);
+    .filter((t) => ["running", "claimed", "coding", "linting", "building", "testing", "reviewing", "integrating", "repairing"].includes(t.status))
+    .map((t) => `${t.spec.id} [${t.status}] ${t.spec.title || t.spec.objective.slice(0, 40)}`);
   const pending = tasks
     .filter((t) => t.status === "pending")
-    .map((t) => `${t.spec.id} (${t.spec.title || t.spec.objective.slice(0, 40)})`);
+    .map((t) => `${t.spec.id} ${t.spec.title || t.spec.objective.slice(0, 40)}`);
+  const done = tasks
+    .filter((t) => t.status === "done" || t.status === "evaluated")
+    .map((t) => `${t.spec.id} ${t.spec.title || t.spec.objective.slice(0, 40)}`);
+  const failed = tasks
+    .filter((t) => t.status === "failed" || t.status === "escalated")
+    .map((t) => `${t.spec.id} [${t.status}] ${t.spec.title || t.spec.objective.slice(0, 40)}`);
+
+  // Blueprint context
+  let blueprintContext = "";
+  if (workspace) {
+    const bp = readBlueprint(workspace);
+    if (bp) {
+      blueprintContext = `
+Project blueprint:
+- Type: ${bp.project.type}
+- Config files: ${bp.project.configFiles.join(", ")}
+- Top dirs: ${bp.project.topDirs.join(", ")}
+- Deps: ${bp.project.deps.length} packages
+- Scripts: ${Object.keys(bp.project.scripts).join(", ")}`;
+      if (bp.git) {
+        blueprintContext += `
+- Git: ${bp.git.branch} @ ${bp.git.commitHash} — ${bp.git.commitMessage}${bp.git.dirtyFiles > 0 ? ` (${bp.git.dirtyFiles} dirty)` : ""}`;
+      }
+      if (bp.checkpoint) {
+        blueprintContext += `
+- Last checkpoint: ${bp.checkpoint.summary} (${bp.checkpoint.completedTasks.length} tasks, ${bp.checkpoint.createdAt})`;
+      }
+    }
+  }
 
   return `You are Hive Supervisor, a local AI agent coordinator. You manage coding tasks executed by Claude Code and Codex CLI agents.
 
-Current state:
-- Workspace: ${repoPath}
-- Running tasks: ${running.length > 0 ? running.join(", ") : "none"}
-- Pending tasks: ${pending.length > 0 ? pending.join(", ") : "none"}
+Current workspace: ${repoPath}
+${blueprintContext}
+
+Task status:
+- Active: ${running.length > 0 ? running.join("; ") : "none"}
+- Pending: ${pending.length > 0 ? pending.join("; ") : "none"}
+- Done: ${done.length > 0 ? done.join("; ") : "none"}
+- Failed: ${failed.length > 0 ? failed.join("; ") : "none"}
 - Available agents: ${agentNames}
 
 You can:
