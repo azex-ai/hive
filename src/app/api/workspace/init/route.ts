@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getConfig, setActiveWorkspacePath } from "@/lib/config";
 import { scanWorkspace, readBlueprint } from "@/lib/blueprint";
 import { clearChatHistory } from "@/lib/chat-store";
-import { resetSupervisorSession } from "@/lib/supervisor";
+import { resetSupervisorSession, warmSession } from "@/lib/supervisor";
 import fs from "fs";
 import path from "path";
 
@@ -51,6 +51,9 @@ export async function POST(req: NextRequest) {
   // Scan workspace and create/update blueprint
   const blueprint = scanWorkspace(body.repo_path);
   const isFirstTime = !readBlueprint(body.repo_path)?.checkpoint;
+
+  // Pre-warm supervisor session in background (non-blocking)
+  warmSession(body.repo_path).catch(() => {});
 
   return NextResponse.json({
     data: {

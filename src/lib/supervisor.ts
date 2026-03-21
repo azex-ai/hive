@@ -5,8 +5,37 @@ import { getConfig } from "./config";
 import { extractJSON } from "./json-extract";
 import { readBlueprint } from "./blueprint";
 
-// Session state — per workspace
-const sessionByWorkspace = new Map<string, string>();
+import fs from "fs";
+import path from "path";
+
+// Session state — persisted to file for cross-module consistency (Turbopack workaround)
+const SESSION_FILE = "/tmp/hive-supervisor-sessions.json";
+
+function loadSessions(): Record<string, string> {
+  try {
+    if (fs.existsSync(SESSION_FILE)) {
+      return JSON.parse(fs.readFileSync(SESSION_FILE, "utf-8")) as Record<string, string>;
+    }
+  } catch { /* ignore */ }
+  return {};
+}
+
+function saveSession(workspace: string, sessionId: string): void {
+  const sessions = loadSessions();
+  sessions[workspace] = sessionId;
+  fs.writeFileSync(SESSION_FILE, JSON.stringify(sessions), "utf-8");
+}
+
+function getSession(workspace: string): string | undefined {
+  return loadSessions()[workspace];
+}
+
+function deleteSession(workspace: string): void {
+  const sessions = loadSessions();
+  delete sessions[workspace];
+  fs.writeFileSync(SESSION_FILE, JSON.stringify(sessions), "utf-8");
+}
+
 let currentSessionWorkspace = "";
 
 // Pre-load the SDK module at import time to avoid dynamic import latency
@@ -20,6 +49,67 @@ async function getQueryFn() {
 }
 // Eagerly pre-load
 getQueryFn().catch(() => {});
+
+// --- Session Pool ---
+// Pre-warm sessions so chat requests have near-zero connection latency
+
+interface WarmSession {
+  sessionId: string;
+  workspace: string;
+  warmedAt: number;
+}
+
+const warmPool = new Map<string, WarmSession>();
+const warmingInProgress = new Set<string>();
+
+/**
+ * Pre-warm a session for a workspace. Sends a lightweight init query
+ * to establish a Claude Code process + session, so subsequent queries
+ * resume instantly.
+ */
+export async function warmSession(workspace: string): Promise<void> {
+  // Skip if already warm or warming
+  if (warmPool.has(workspace) || warmingInProgress.has(workspace)) return;
+  if (getSession(workspace)) return; // Already has an active session
+
+  warmingInProgress.add(workspace);
+
+  try {
+    const query = await getQueryFn();
+
+    const sysPrompt = buildSupervisorSystemPrompt();
+
+    for await (const msg of query({
+      prompt: sysPrompt + "\n\nRespond with: {\"intent\":\"reply\",\"response\":\"ready\"}",
+      options: {
+        maxTurns: 1,
+        abortController: new AbortController(),
+        permissionMode: "bypassPermissions" as const,
+        cwd: workspace || undefined,
+      },
+    })) {
+      if (msg.type === "result" && msg.session_id) {
+        const sessionId = msg.session_id as string;
+        saveSession(workspace, sessionId);
+        warmPool.set(workspace, {
+          sessionId,
+          workspace,
+          warmedAt: Date.now(),
+        });
+        console.log(`[hive] session warmed for ${workspace} (${sessionId.slice(0, 8)}...)`);
+      }
+    }
+  } catch (err) {
+    console.error(`[hive] session warm failed for ${workspace}:`, err instanceof Error ? err.message : String(err));
+  } finally {
+    warmingInProgress.delete(workspace);
+  }
+}
+
+/** Check if a workspace has a warm session ready */
+export function hasWarmSession(workspace: string): boolean {
+  return warmPool.has(workspace) || !!getSession(workspace);
+}
 
 /** Streaming event from supervisor */
 export interface SupervisorStreamEvent {
@@ -49,7 +139,7 @@ export async function* supervisorStream(prompt: string, workspace?: string): Asy
     queryOptions.cwd = ws;
   }
 
-  const existingSession = sessionByWorkspace.get(ws);
+  const existingSession = getSession(ws);
   if (existingSession) {
     queryOptions.resume = existingSession;
   }
@@ -68,7 +158,7 @@ export async function* supervisorStream(prompt: string, workspace?: string): Asy
         finalResult = typeof msg.result === "string" ? msg.result : JSON.stringify(msg.result);
       }
       if (msg.session_id) {
-        sessionByWorkspace.set(ws, msg.session_id as string);
+        saveSession(ws, msg.session_id as string);
         currentSessionWorkspace = ws;
       }
     } else if (msg.type === "stream_event") {
@@ -129,9 +219,11 @@ export async function supervisorSend(prompt: string, workspace?: string): Promis
 /** Reset supervisor session for a workspace (called on workspace switch) */
 export function resetSupervisorSession(workspace?: string): void {
   if (workspace) {
-    sessionByWorkspace.delete(workspace);
+    deleteSession(workspace);
+    warmPool.delete(workspace);
   } else {
-    sessionByWorkspace.clear();
+    try { fs.unlinkSync(SESSION_FILE); } catch { /* ignore */ }
+    warmPool.clear();
   }
 }
 
