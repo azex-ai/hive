@@ -9,9 +9,21 @@ import { readBlueprint } from "./blueprint";
 const sessionByWorkspace = new Map<string, string>();
 let currentSessionWorkspace = "";
 
+// Pre-load the SDK module at import time to avoid dynamic import latency
+let _queryFn: typeof import("@anthropic-ai/claude-code")["query"] | null = null;
+async function getQueryFn() {
+  if (!_queryFn) {
+    const mod = await import("@anthropic-ai/claude-code");
+    _queryFn = mod.query;
+  }
+  return _queryFn;
+}
+// Eagerly pre-load
+getQueryFn().catch(() => {});
+
 /** Streaming event from supervisor */
 export interface SupervisorStreamEvent {
-  type: "thinking" | "text" | "tool_start" | "tool_delta" | "tool_result" | "result" | "error" | "block_stop";
+  type: "connected" | "thinking" | "text" | "tool_start" | "tool_delta" | "tool_result" | "result" | "error" | "block_stop";
   content: string;
   /** For tool_start: tool name */
   toolName?: string;
@@ -22,7 +34,7 @@ export interface SupervisorStreamEvent {
  * Uses `includePartialMessages: true` to get content_block_delta events.
  */
 export async function* supervisorStream(prompt: string, workspace?: string): AsyncGenerator<SupervisorStreamEvent> {
-  const { query } = await import("@anthropic-ai/claude-code");
+  const query = await getQueryFn();
 
   const ws = workspace || getConfig().repo || "";
 
@@ -48,7 +60,10 @@ export async function* supervisorStream(prompt: string, workspace?: string): Asy
   let accumulated = "";
 
   for await (const msg of query(options)) {
-    if (msg.type === "result") {
+    if (msg.type === "system") {
+      // system init — connected to agent
+      yield { type: "connected", content: "connected" };
+    } else if (msg.type === "result") {
       if (msg.subtype === "success") {
         finalResult = typeof msg.result === "string" ? msg.result : JSON.stringify(msg.result);
       }

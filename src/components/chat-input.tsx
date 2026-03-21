@@ -59,7 +59,7 @@ function IntentBadge({ intent }: { intent: string }) {
 
 /** Stream status labels for intermediate events */
 const STREAM_LABELS: Record<string, string> = {
-  thinking: "thinking",
+  thinking: "connecting",
   reasoning: "reasoning",
   using_tool: "using tool",
   writing: "writing",

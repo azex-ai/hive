@@ -54,6 +54,9 @@ export async function POST(req: NextRequest) {
 
     for await (const event of supervisorStream(fullPrompt)) {
       switch (event.type) {
+        case "connected":
+          setChatStatus("thinking", "agent connected, waiting for response...");
+          break;
         case "result":
           rawOutput = event.content;
           break;
