@@ -61,7 +61,7 @@ export function TopBar() {
     refreshTasks();
   }, [refreshTasks]);
 
-  // Poll status every 5 seconds
+  // Poll status + workspace every 5 seconds
   useEffect(() => {
     const id = setInterval(() => {
       fetchStatus()
@@ -70,6 +70,7 @@ export function TopBar() {
           setConnected(true);
         })
         .catch(() => setConnected(false));
+      fetchWorkspace().then(setWorkspace).catch(() => {});
       refreshTasks();
     }, 5000);
     return () => clearInterval(id);
