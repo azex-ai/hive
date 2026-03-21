@@ -6,8 +6,9 @@ import {
   useEffect,
   type KeyboardEvent,
 } from "react";
-import { sendChatMessage, fetchChatHistory } from "@/lib/api";
+import { fetchChatHistory } from "@/lib/api";
 import type { ChatMessage, Task, TaskSpec } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 interface ChatInputProps {
   onTasksCreated?: (tasks: Task[]) => void;
@@ -56,21 +57,31 @@ function IntentBadge({ intent }: { intent: string }) {
   );
 }
 
+/** Stream status labels for intermediate events */
+const STREAM_LABELS: Record<string, string> = {
+  thinking: "reasoning",
+  tool_use: "using tool",
+  tool_result: "got result",
+  text: "writing",
+};
+
 export function ChatInput({ onTasksCreated }: ChatInputProps) {
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [streamStatus, setStreamStatus] = useState<string>("");
+  const [streamDetail, setStreamDetail] = useState<string>("");
   const inputRef = useRef<HTMLInputElement>(null);
   const logRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll to bottom on new messages.
+  // Auto-scroll to bottom on new messages
   useEffect(() => {
     if (logRef.current) {
       logRef.current.scrollTop = logRef.current.scrollHeight;
     }
-  }, [messages, loading]);
+  }, [messages, loading, streamStatus]);
 
-  // Fetch history on mount.
+  // Fetch history on mount
   useEffect(() => {
     fetchChatHistory()
       .then((history: ChatMessage[]) => {
@@ -85,9 +96,7 @@ export function ChatInput({ onTasksCreated }: ChatInputProps) {
           );
         }
       })
-      .catch(() => {
-        // history unavailable — start fresh
-      });
+      .catch(() => {});
   }, []);
 
   async function handleSend() {
@@ -104,24 +113,48 @@ export function ChatInput({ onTasksCreated }: ChatInputProps) {
     setMessages((prev) => [...prev, userMsg]);
     setInput("");
     setLoading(true);
+    setStreamStatus("connecting");
+    setStreamDetail("");
 
     try {
-      const res = await sendChatMessage(text);
+      const res = await fetch("/api/chat/stream", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: text }),
+      });
 
-      const assistantMsg: DisplayMessage = {
-        id: crypto.randomUUID(),
-        role: "assistant",
-        content: res.response,
-        intent: res.intent,
-        taskCount: res.tasks?.length ?? 0,
-        taskId: res.task_id,
-        created_at: new Date().toISOString(),
-      };
+      if (!res.ok || !res.body) {
+        throw new Error(`HTTP ${res.status}`);
+      }
 
-      setMessages((prev) => [...prev, assistantMsg]);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
 
-      if (res.tasks && res.tasks.length > 0) {
-        onTasksCreated?.(res.tasks.map(taskSpecToTask));
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+
+        // Parse SSE events from buffer
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? ""; // keep incomplete line
+
+        let eventType = "";
+        for (const line of lines) {
+          if (line.startsWith("event: ")) {
+            eventType = line.slice(7).trim();
+          } else if (line.startsWith("data: ") && eventType) {
+            try {
+              const data = JSON.parse(line.slice(6)) as Record<string, string>;
+              handleStreamEvent(eventType, data);
+            } catch {
+              // ignore malformed data
+            }
+            eventType = "";
+          }
+        }
       }
     } catch (err) {
       const errMsg: DisplayMessage = {
@@ -134,7 +167,60 @@ export function ChatInput({ onTasksCreated }: ChatInputProps) {
       setMessages((prev) => [...prev, errMsg]);
     } finally {
       setLoading(false);
+      setStreamStatus("");
+      setStreamDetail("");
       inputRef.current?.focus();
+    }
+  }
+
+  function handleStreamEvent(event: string, data: Record<string, string>) {
+    switch (event) {
+      case "thinking":
+        setStreamStatus("reasoning");
+        setStreamDetail(data.content?.slice(0, 80) ?? "");
+        break;
+      case "text":
+        setStreamStatus("writing");
+        setStreamDetail(data.content?.slice(0, 80) ?? "");
+        break;
+      case "tool_use":
+        setStreamStatus("using tool");
+        setStreamDetail(data.content?.slice(0, 80) ?? "");
+        break;
+      case "tool_result":
+        setStreamStatus("got result");
+        setStreamDetail(data.content?.slice(0, 80) ?? "");
+        break;
+      case "done": {
+        const assistantMsg: DisplayMessage = {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: data.response ?? "",
+          intent: data.intent,
+          taskCount: Array.isArray(data.tasks) ? (data.tasks as unknown[]).length : 0,
+          taskId: data.task_id,
+          created_at: new Date().toISOString(),
+        };
+        setMessages((prev) => [...prev, assistantMsg]);
+
+        // Handle created tasks
+        const tasks = data.tasks as unknown;
+        if (Array.isArray(tasks) && tasks.length > 0) {
+          onTasksCreated?.((tasks as TaskSpec[]).map(taskSpecToTask));
+        }
+        break;
+      }
+      case "error": {
+        const errMsg: DisplayMessage = {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: `error: ${data.error ?? "unknown"}`,
+          intent: "reply",
+          created_at: new Date().toISOString(),
+        };
+        setMessages((prev) => [...prev, errMsg]);
+        break;
+      }
     }
   }
 
@@ -186,14 +272,12 @@ export function ChatInput({ onTasksCreated }: ChatInputProps) {
                   {msg.intent && <IntentBadge intent={msg.intent} />}
                 </div>
 
-                {/* Inline task summary for create_tasks intent */}
                 {msg.intent === "create_tasks" && msg.taskCount != null && msg.taskCount > 0 && (
                   <div className="ml-4 text-[10px] text-zinc-500">
                     → {msg.taskCount} task{msg.taskCount !== 1 ? "s" : ""} queued
                   </div>
                 )}
 
-                {/* Inline task ID for approve/reject/run_task */}
                 {(msg.intent === "approve" ||
                   msg.intent === "reject" ||
                   msg.intent === "run_task") &&
@@ -207,10 +291,20 @@ export function ChatInput({ onTasksCreated }: ChatInputProps) {
           </div>
         ))}
 
+        {/* Streaming status — shows real-time supervisor state */}
         {loading && (
-          <div className="flex gap-2 leading-5">
-            <span className="text-zinc-600 shrink-0 select-none">$</span>
-            <span className="text-zinc-600 animate-pulse">thinking...</span>
+          <div className="flex flex-col gap-1">
+            <div className="flex gap-2 leading-5 items-center">
+              <span className="text-zinc-600 shrink-0 select-none">$</span>
+              <span className="text-yellow-500/80 animate-pulse">
+                {streamStatus || "thinking"}...
+              </span>
+            </div>
+            {streamDetail && (
+              <div className="ml-4 text-[10px] text-zinc-600 truncate max-w-full">
+                {streamDetail}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -231,9 +325,9 @@ export function ChatInput({ onTasksCreated }: ChatInputProps) {
           spellCheck={false}
           className="flex-1 bg-transparent text-zinc-200 placeholder:text-zinc-700 text-xs font-mono focus:outline-none disabled:opacity-50"
         />
-        {loading && (
-          <span className="text-zinc-600 text-[10px] animate-pulse shrink-0">
-            sending
+        {loading && streamStatus && (
+          <span className="text-yellow-600 text-[10px] shrink-0">
+            {STREAM_LABELS[streamStatus] ?? streamStatus}
           </span>
         )}
       </div>

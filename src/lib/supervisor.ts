@@ -9,8 +9,17 @@ import { readBlueprint } from "./blueprint";
 const sessionByWorkspace = new Map<string, string>();
 let currentSessionWorkspace = "";
 
-export async function supervisorSend(prompt: string, workspace?: string): Promise<string> {
-  // Dynamic import since @anthropic-ai/claude-code is ESM
+/** Streaming event from supervisor */
+export interface SupervisorStreamEvent {
+  type: "thinking" | "text" | "tool_use" | "tool_result" | "result" | "error";
+  content: string;
+}
+
+/**
+ * Stream supervisor messages as they arrive.
+ * Yields intermediate events (thinking, tool use, text) and a final result.
+ */
+export async function* supervisorStream(prompt: string, workspace?: string): AsyncGenerator<SupervisorStreamEvent> {
   const { query } = await import("@anthropic-ai/claude-code");
 
   const ws = workspace || getConfig().repo || "";
@@ -25,7 +34,6 @@ export async function supervisorSend(prompt: string, workspace?: string): Promis
     queryOptions.cwd = ws;
   }
 
-  // Resume session only if same workspace
   const existingSession = sessionByWorkspace.get(ws);
   if (existingSession) {
     queryOptions.resume = existingSession;
@@ -50,13 +58,34 @@ export async function supervisorSend(prompt: string, workspace?: string): Promis
         for (const block of msg.message.content) {
           if (block.type === "text") {
             accumulated += block.text;
+            yield { type: "text", content: block.text };
+          } else if (block.type === "thinking") {
+            yield { type: "thinking", content: (block as Record<string, string>).thinking || "" };
+          } else if (block.type === "tool_use") {
+            const tb = block as Record<string, unknown>;
+            yield { type: "tool_use", content: `${tb.name ?? "tool"}(${JSON.stringify(tb.input ?? {}).slice(0, 200)})` };
+          } else if (block.type === "tool_result") {
+            const tb = block as Record<string, unknown>;
+            const text = typeof tb.content === "string" ? tb.content : JSON.stringify(tb.content ?? "");
+            yield { type: "tool_result", content: text.slice(0, 500) };
           }
         }
       }
     }
   }
 
-  return finalResult || accumulated;
+  yield { type: "result", content: finalResult || accumulated };
+}
+
+/** Non-streaming wrapper for backward compatibility */
+export async function supervisorSend(prompt: string, workspace?: string): Promise<string> {
+  let result = "";
+  for await (const event of supervisorStream(prompt, workspace)) {
+    if (event.type === "result") {
+      result = event.content;
+    }
+  }
+  return result;
 }
 
 /** Reset supervisor session for a workspace (called on workspace switch) */
