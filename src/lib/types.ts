@@ -279,6 +279,15 @@ export interface ModelSelection {
   reason: string;
 }
 
+export interface BenchmarkEntry {
+  model: string;
+  samples: number;
+  passRate: number;
+  avgRepairs: number;
+  rejectRate: number;
+  score: number;
+}
+
 export interface PipelineConfig {
   max_repair_rounds: number;
   self_review_probability: number;

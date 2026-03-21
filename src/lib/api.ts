@@ -13,6 +13,8 @@ import type {
   HealthResponse,
   TaskFilesResponse,
   SkillsResponse,
+  PipelineStatus,
+  BenchmarkEntry,
 } from "./types";
 
 const BASE = "/api";
@@ -170,6 +172,27 @@ export async function fetchTaskFileContent(id: string, filename: string): Promis
 
 export async function fetchSkills(): Promise<SkillsResponse> {
   return apiFetch<SkillsResponse>("/skills");
+}
+
+// --- Pipeline ---
+
+export async function fetchPipelineStatus(taskId: string): Promise<PipelineStatus> {
+  return apiFetch<PipelineStatus>(`/tasks/${taskId}/pipeline`);
+}
+
+export async function controlPipeline(taskId: string, action: "pause" | "resume"): Promise<{ action: string }> {
+  const res = await fetch(`${BASE}/tasks/${taskId}/pipeline`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action }),
+  });
+  const json = await res.json();
+  if (json.error) throw new Error(json.error);
+  return json.data;
+}
+
+export async function fetchBenchmarks(stage: string, days = 30): Promise<BenchmarkEntry[]> {
+  return apiFetch<BenchmarkEntry[]>(`/benchmarks?stage=${encodeURIComponent(stage)}&days=${days}`);
 }
 
 // --- SSE ---
