@@ -168,15 +168,22 @@ function migrate(db: Database.Database) {
     );
     CREATE INDEX IF NOT EXISTS idx_bench_stage_model ON model_benchmarks(stage, model);
   `);
+
+  // Incremental migration: add workspace column to tasks if missing
+  const cols = db.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>;
+  if (!cols.some((c) => c.name === "workspace")) {
+    db.exec(`ALTER TABLE tasks ADD COLUMN workspace TEXT NOT NULL DEFAULT ''`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_workspace ON tasks(workspace)`);
+  }
 }
 
-export function submitTasks(specs: TaskSpec[]): Task[] {
+export function submitTasks(specs: TaskSpec[], workspace = ""): Task[] {
   const db = getDb();
   const now = new Date().toISOString();
   const created: Task[] = [];
 
   const insertTask = db.prepare(
-    "INSERT INTO tasks (id, title, spec_json, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+    "INSERT INTO tasks (id, title, spec_json, status, created_at, updated_at, workspace) VALUES (?, ?, ?, ?, ?, ?, ?)",
   );
   const updateTask = db.prepare("UPDATE tasks SET id = ?, spec_json = ? WHERE seq = ?");
   const insertDep = db.prepare("INSERT OR IGNORE INTO task_deps (task_id, depends_on) VALUES (?, ?)");
@@ -186,7 +193,7 @@ export function submitTasks(specs: TaskSpec[]): Task[] {
       const title = spec.title || spec.id || "";
       const cleanSpec = { ...spec, id: "" };
 
-      const result = insertTask.run("", title, JSON.stringify(cleanSpec), "pending", now, now);
+      const result = insertTask.run("", title, JSON.stringify(cleanSpec), "pending", now, now, workspace);
       const seq = result.lastInsertRowid;
       const hiveId = `HIVE-${seq}`;
 
@@ -212,12 +219,17 @@ export function submitTasks(specs: TaskSpec[]): Task[] {
   return created;
 }
 
-export function listTasks(): Task[] {
+export function listTasks(workspace?: string): Task[] {
   const db = getDb();
+  if (workspace !== undefined) {
+    const rows = db
+      .prepare("SELECT id, title, spec_json, status, created_at, updated_at FROM tasks WHERE workspace = ? ORDER BY seq ASC")
+      .all(workspace) as TaskRow[];
+    return rows.map(rowToTask);
+  }
   const rows = db
     .prepare("SELECT id, title, spec_json, status, created_at, updated_at FROM tasks ORDER BY seq ASC")
     .all() as TaskRow[];
-
   return rows.map(rowToTask);
 }
 

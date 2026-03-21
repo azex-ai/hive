@@ -1,26 +1,35 @@
 import { NextRequest, NextResponse } from "next/server";
 import { listTasks, submitTasks } from "@/lib/scheduler";
+import { getConfig } from "@/lib/config";
 import { publishEvent } from "@/lib/events";
 import { scheduleDispatch } from "@/lib/executor";
 
-export async function GET() {
-  const tasks = listTasks();
+export async function GET(req: NextRequest) {
+  const config = getConfig();
+  const workspace = req.nextUrl.searchParams.get("workspace") ?? config.repo ?? "";
+  const tasks = listTasks(workspace);
   return NextResponse.json({ data: tasks });
 }
 
 export async function POST(req: NextRequest) {
-  let specs;
+  let body;
   try {
-    specs = await req.json();
+    body = await req.json();
   } catch {
     return NextResponse.json({ error: "invalid JSON body" }, { status: 400 });
   }
+
+  // Support both array and { specs, workspace } formats
+  const specs = Array.isArray(body) ? body : body;
+  const config = getConfig();
+  const workspace = config.repo ?? "";
+
   // Clean specs: move id to title if title empty, clear id
   for (const s of specs) {
     if (!s.title && s.id) s.title = s.id;
     s.id = "";
   }
-  const created = submitTasks(specs);
+  const created = submitTasks(specs, workspace);
   publishEvent({ type: "tasks.submitted", data: { count: created.length } });
 
   // Auto-dispatch: pick up newly created tasks immediately

@@ -6,6 +6,7 @@ import {
   extractSupervisorEnvelope,
 } from "@/lib/supervisor";
 import { submitTasks, updateTaskStatus } from "@/lib/scheduler";
+import { getConfig } from "@/lib/config";
 import { runTask, scheduleDispatch } from "@/lib/executor";
 import { publishEvent } from "@/lib/events";
 import { addChatMessage, getChatHistory } from "@/lib/chat-store";
@@ -66,7 +67,8 @@ export async function POST(req: NextRequest) {
             if (!t.title && t.id) t.title = t.id;
             t.id = "";
           }
-          createdTasks = submitTasks(env.tasks);
+          const config = getConfig();
+          createdTasks = submitTasks(env.tasks, config.repo ?? "");
           publishEvent({
             type: "chat.tasks.created",
             data: {

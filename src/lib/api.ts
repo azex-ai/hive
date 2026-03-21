@@ -34,8 +34,9 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
 
 // --- Tasks ---
 
-export async function fetchTasks(): Promise<Task[]> {
-  return apiFetch<Task[]>("/tasks");
+export async function fetchTasks(workspace?: string): Promise<Task[]> {
+  const params = workspace !== undefined ? `?workspace=${encodeURIComponent(workspace)}` : "";
+  return apiFetch<Task[]>(`/tasks${params}`);
 }
 
 export async function fetchTask(id: string): Promise<TaskDetailResponse> {
