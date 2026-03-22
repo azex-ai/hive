@@ -47,8 +47,8 @@ export function createWorktree(repoPath: string, baseDir: string, branch: string
   try {
     git(repoPath, "worktree", "add", "-b", branch, workdir, "HEAD");
     return workdir;
-  } catch (err: any) {
-    throw new Error(`worktree create "${branch}": ${err.message}`);
+  } catch (err: unknown) {
+    throw new Error(`worktree create "${branch}": ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
@@ -89,8 +89,8 @@ export function mergeBranch(repoPath: string, branch: string): { success: boolea
   try {
     git(repoPath, "merge", "--no-ff", branch, "-m", `hive: merge ${branch}`);
     return { success: true };
-  } catch (err: any) {
-    return { success: false, error: err.message };
+  } catch (err: unknown) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
 

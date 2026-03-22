@@ -1,9 +1,6 @@
 import "server-only";
-import fs from "fs";
-import path from "path";
-
-// Use /tmp for cross-module file sharing — avoids Turbopack cwd inconsistencies
-const STATUS_FILE = "/tmp/hive-chat-status.json";
+import { subscribe } from "./events";
+import type { SSEEvent } from "./types";
 
 interface ChatStatus {
   state: "idle" | "thinking" | "reasoning" | "using_tool" | "writing";
@@ -11,21 +8,27 @@ interface ChatStatus {
   updatedAt: string;
 }
 
-export function setChatStatus(state: ChatStatus["state"], detail = ""): void {
-  const dir = path.dirname(STATUS_FILE);
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(
-    STATUS_FILE,
-    JSON.stringify({ state, detail: detail.slice(0, 200), updatedAt: new Date().toISOString() }),
-    "utf-8",
-  );
-}
+// In-memory state — updated by subscribing to chat.status SSE events
+let currentStatus: ChatStatus = {
+  state: "idle",
+  detail: "",
+  updatedAt: new Date().toISOString(),
+};
+
+// Subscribe to chat.status events published by the chat route
+subscribe((event: SSEEvent) => {
+  if (event.type === "chat.status") {
+    const data = event.data as { state?: string; detail?: string } | undefined;
+    if (data?.state) {
+      currentStatus = {
+        state: data.state as ChatStatus["state"],
+        detail: (data.detail ?? "").slice(0, 200),
+        updatedAt: new Date().toISOString(),
+      };
+    }
+  }
+});
 
 export function getChatStatus(): ChatStatus {
-  try {
-    if (fs.existsSync(STATUS_FILE)) {
-      return JSON.parse(fs.readFileSync(STATUS_FILE, "utf-8")) as ChatStatus;
-    }
-  } catch { /* ignore */ }
-  return { state: "idle", detail: "", updatedAt: new Date().toISOString() };
+  return currentStatus;
 }

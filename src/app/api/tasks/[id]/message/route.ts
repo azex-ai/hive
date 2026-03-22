@@ -55,12 +55,13 @@ export async function POST(
   });
 
   try {
-    const { query } = await import("@anthropic-ai/claude-code");
+    const { getQueryFn } = await import("@/lib/sdk");
+    const query = await getQueryFn();
     let output = "";
 
     for await (const msg of query({
       prompt: combinedPrompt,
-      options: { abortController: new AbortController(), maxTurns: 1, cwd: taskOutDir, permissionMode: "bypassPermissions" as const },
+      options: { abortController: new AbortController(), maxTurns: 1, cwd: taskOutDir, permissionMode: "bypassPermissions" as const, allowDangerouslySkipPermissions: true },
     })) {
       if (msg.type === "result" && msg.subtype === "success") {
         output = typeof msg.result === "string" ? msg.result : JSON.stringify(msg.result);

@@ -203,6 +203,8 @@ export function connectSSE(onEvent: (event: SSEEvent) => void): () => void {
 
   const es = new EventSource("/api/events");
 
+  // Server emits unnamed "message" events — onmessage handles all of them.
+  // The event type is inside the JSON payload as event.type.
   es.onmessage = (e) => {
     try {
       const event: SSEEvent = JSON.parse(e.data);

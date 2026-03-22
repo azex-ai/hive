@@ -9,9 +9,11 @@ export async function GET(req: NextRequest) {
 
       const unsubscribe = subscribe((event) => {
         try {
+          // Emit as unnamed "message" events so EventSource.onmessage fires.
+          // The event type is encoded inside the JSON payload (event.type).
           controller.enqueue(
             encoder.encode(
-              `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
+              `data: ${JSON.stringify(event)}\n\n`,
             ),
           );
         } catch {

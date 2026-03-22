@@ -24,10 +24,13 @@
     "build": "next build",
     "start": "next start --port 58080",
     "lint": "next lint",
-    "serve": "next dev --port 58080"
+    "serve": "next dev --port 58080",
+    "test": "vitest run",
+    "test:unit": "vitest run --testPathPattern='(supervisor|runtime-profiles)\\.test'",
+    "test:integration": "vitest run --testPathPattern='api-integration\\.test'"
   },
   "dependencies": {
-    "@anthropic-ai/claude-code": "^1.0.0",
+    "@anthropic-ai/claude-agent-sdk": "^0.2.81",
     "@base-ui/react": "^1.2.2",
     "better-sqlite3": "^11.9.1",
     "class-variance-authority": "^0.7.1",
@@ -54,6 +57,7 @@
     "@types/uuid": "^10.0.0",
     "postcss": "^8.5.4",
     "tailwindcss": "^4.1.8",
-    "typescript": "^5.8.3"
+    "typescript": "^5.8.3",
+    "vitest": "^4.1.0"
   }
 }

@@ -15,6 +15,7 @@ export class CodexRuntime implements AgentRuntime {
       const proc = execa("codex", ["exec", "--json", "-q", prompt], {
         cwd: env.workdir || undefined,
         timeout: 10 * 60 * 1000, // 10 min
+        cancelSignal: env.abortSignal,
       });
 
       if (proc.stdout) {

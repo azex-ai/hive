@@ -24,6 +24,23 @@ interface PipelineViewProps {
 
 const STAGE_ORDER = ["design", "code", "lint", "build", "test", "review", "integrate"] as const;
 
+const PIPELINE_EVENT_TYPES = new Set([
+  "pipeline_start",
+  "pipeline_stage",
+  "pipeline_repair",
+  "pipeline_repair_result",
+  "pipeline_escalated",
+  "pipeline_paused",
+  "pipeline_resumed",
+  "pipeline_complete",
+  "pipeline_error",
+  // task status changes also affect pipeline view
+  "task_status",
+  "task_complete",
+  "task_cancelled",
+  "task_error",
+]);
+
 function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
   if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
@@ -322,7 +339,7 @@ export function PipelineView({ taskId }: PipelineViewProps) {
   // Auto-refresh via SSE
   useEffect(() => {
     const disconnect = connectSSE((event) => {
-      if (event.task_id === taskId || event.type === "pipeline_update") {
+      if (PIPELINE_EVENT_TYPES.has(event.type) && event.task_id === taskId) {
         load();
       }
     });

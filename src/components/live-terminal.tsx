@@ -108,6 +108,62 @@ export function LiveTerminal({ taskId }: LiveTerminalProps) {
       }
     });
 
+    es.addEventListener("task_cancelled", (e: MessageEvent) => {
+      try {
+        const ev = JSON.parse(e.data);
+        appendLine("[cancelled] by user", "status", ev.timestamp);
+      } catch {
+        appendLine("[cancelled] by user", "status");
+      }
+    });
+
+    es.addEventListener("agent_tool_use", (e: MessageEvent) => {
+      try {
+        const ev = JSON.parse(e.data);
+        const d = ev.data as { tool?: string; elapsed?: number };
+        const elapsed = d.elapsed !== undefined ? ` (${d.elapsed}s)` : "";
+        appendLine(`[tool] ${d.tool ?? "unknown"}${elapsed}`, "status", ev.timestamp);
+      } catch {
+        appendLine(e.data, "status");
+      }
+    });
+
+    es.addEventListener("agent_progress", (e: MessageEvent) => {
+      try {
+        const ev = JSON.parse(e.data);
+        const d = ev.data as { summary?: string };
+        appendLine(`[progress] ${d.summary ?? ""}`, "status", ev.timestamp);
+      } catch {
+        appendLine(e.data, "status");
+      }
+    });
+
+    es.addEventListener("task_cost", (e: MessageEvent) => {
+      try {
+        const ev = JSON.parse(e.data);
+        const d = ev.data as { totalUsd?: number; inputTokens?: number; outputTokens?: number };
+        const usd = d.totalUsd !== undefined ? `$${d.totalUsd.toFixed(4)}` : "?";
+        const tokens =
+          d.inputTokens !== undefined && d.outputTokens !== undefined
+            ? ` (${d.inputTokens}+${d.outputTokens} tokens)`
+            : "";
+        appendLine(`[cost] ${usd}${tokens}`, "system", ev.timestamp);
+      } catch {
+        appendLine(e.data, "system");
+      }
+    });
+
+    es.addEventListener("rate_limit", (e: MessageEvent) => {
+      try {
+        const ev = JSON.parse(e.data);
+        const d = ev.data as { retryAfterMs?: number };
+        const retry = d.retryAfterMs !== undefined ? `, retry in ${d.retryAfterMs}ms` : "";
+        appendLine(`[rate-limit] paused${retry}`, "system", ev.timestamp);
+      } catch {
+        appendLine("[rate-limit] paused", "system");
+      }
+    });
+
     es.addEventListener("ping", () => {
       // heartbeat — no-op
     });

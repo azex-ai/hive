@@ -2,122 +2,67 @@ import "server-only";
 import type { SupervisorEnvelope } from "./types";
 import { listTasks } from "./scheduler";
 import { getConfig } from "./config";
-import { extractJSON } from "./json-extract";
 import { readBlueprint } from "./blueprint";
+import { getQueryFn } from "./sdk";
 
-import fs from "fs";
-import path from "path";
-
-// Session state — persisted to file for cross-module consistency (Turbopack workaround)
-const SESSION_FILE = "/tmp/hive-supervisor-sessions.json";
-
-function loadSessions(): Record<string, string> {
-  try {
-    if (fs.existsSync(SESSION_FILE)) {
-      return JSON.parse(fs.readFileSync(SESSION_FILE, "utf-8")) as Record<string, string>;
-    }
-  } catch { /* ignore */ }
-  return {};
-}
-
-function saveSession(workspace: string, sessionId: string): void {
-  const sessions = loadSessions();
-  sessions[workspace] = sessionId;
-  fs.writeFileSync(SESSION_FILE, JSON.stringify(sessions), "utf-8");
-}
-
-function getSession(workspace: string): string | undefined {
-  return loadSessions()[workspace];
-}
-
-function deleteSession(workspace: string): void {
-  const sessions = loadSessions();
-  delete sessions[workspace];
-  fs.writeFileSync(SESSION_FILE, JSON.stringify(sessions), "utf-8");
-}
-
-let currentSessionWorkspace = "";
-
-// Pre-load the SDK module at import time to avoid dynamic import latency
-let _queryFn: typeof import("@anthropic-ai/claude-code")["query"] | null = null;
-async function getQueryFn() {
-  if (!_queryFn) {
-    const mod = await import("@anthropic-ai/claude-code");
-    _queryFn = mod.query;
-  }
-  return _queryFn;
-}
-// Eagerly pre-load
-getQueryFn().catch(() => {});
-
-// --- Session Pool ---
-// Pre-warm sessions so chat requests have near-zero connection latency
-
-interface WarmSession {
-  sessionId: string;
-  workspace: string;
-  warmedAt: number;
-}
-
-const warmPool = new Map<string, WarmSession>();
-const warmingInProgress = new Set<string>();
-
-/**
- * Pre-warm a session for a workspace. Sends a lightweight init query
- * to establish a Claude Code process + session, so subsequent queries
- * resume instantly.
- */
-export async function warmSession(workspace: string): Promise<void> {
-  // Skip if already warm or warming
-  if (warmPool.has(workspace) || warmingInProgress.has(workspace)) return;
-  if (getSession(workspace)) return; // Already has an active session
-
-  warmingInProgress.add(workspace);
-
-  try {
-    const query = await getQueryFn();
-
-    const sysPrompt = buildSupervisorSystemPrompt();
-
-    const cfg = getConfig();
-    const model = cfg.supervisor?.model || "sonnet";
-
-    for await (const msg of query({
-      prompt: sysPrompt + "\n\nRespond with: {\"intent\":\"reply\",\"response\":\"ready\"}",
-      options: {
-        maxTurns: 1,
-        model,
-        abortController: new AbortController(),
-        permissionMode: "bypassPermissions" as const,
-        cwd: workspace || undefined,
+// --- Structured output schema ---
+const SUPERVISOR_OUTPUT_SCHEMA = {
+  type: "object",
+  properties: {
+    intent: {
+      type: "string",
+      enum: ["create_tasks", "reply", "query_status", "approve", "reject", "run_task"],
+    },
+    response: { type: "string" },
+    tasks: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          title: { type: "string" },
+          objective: { type: "string" },
+          constraints: { type: "array", items: { type: "string" } },
+          inputs: { type: "array", items: { type: "string" } },
+          outputs: { type: "array", items: { type: "string" } },
+          depends_on: { type: "array", items: { type: "string" } },
+          priority: { type: "number" },
+        },
       },
-    })) {
-      if (msg.type === "result" && msg.session_id) {
-        const sessionId = msg.session_id as string;
-        saveSession(workspace, sessionId);
-        warmPool.set(workspace, {
-          sessionId,
-          workspace,
-          warmedAt: Date.now(),
-        });
-        console.log(`[hive] session warmed for ${workspace} (${sessionId.slice(0, 8)}...)`);
-      }
-    }
-  } catch (err) {
-    console.error(`[hive] session warm failed for ${workspace}:`, err instanceof Error ? err.message : String(err));
-  } finally {
-    warmingInProgress.delete(workspace);
-  }
+    },
+    task_id: { type: "string" },
+    agent: { type: "string" },
+    reason: { type: "string" },
+  },
+  required: ["intent", "response"],
+} as const;
+
+// In-memory session map: workspace -> sessionId
+// SDK handles the actual session persistence internally
+const sessionMap = new Map<string, string>();
+
+/** warmSession is a no-op — sessions are created on first use */
+export async function warmSession(_workspace: string): Promise<void> {
+  // No-op: the SDK resumes sessions lazily on first query
 }
 
-/** Check if a workspace has a warm session ready */
+/** Check if a workspace has a known session */
 export function hasWarmSession(workspace: string): boolean {
-  return warmPool.has(workspace) || !!getSession(workspace);
+  return sessionMap.has(workspace);
 }
 
 /** Streaming event from supervisor */
 export interface SupervisorStreamEvent {
-  type: "connected" | "thinking" | "text" | "tool_start" | "tool_delta" | "tool_result" | "result" | "error" | "block_stop";
+  type:
+    | "connected"
+    | "thinking"
+    | "text"
+    | "tool_start"
+    | "tool_delta"
+    | "tool_result"
+    | "result"
+    | "error"
+    | "block_stop"
+    | "suggestion";
   content: string;
   /** For tool_start: tool name */
   toolName?: string;
@@ -125,68 +70,80 @@ export interface SupervisorStreamEvent {
 
 /**
  * Stream supervisor messages as they arrive — token by token.
- * Uses `includePartialMessages: true` to get content_block_delta events.
+ *
+ * Uses per-request query() calls with resume: sessionId for continuity.
+ * The SDK maintains session history internally; no manual history injection needed.
  */
-export async function* supervisorStream(prompt: string, workspace?: string): AsyncGenerator<SupervisorStreamEvent> {
-  const query = await getQueryFn();
-
+export async function* supervisorStream(
+  prompt: string,
+  workspace?: string,
+): AsyncGenerator<SupervisorStreamEvent> {
   const ws = workspace || getConfig().repo || "";
-
   const config = getConfig();
   const supervisorModel = config.supervisor?.model || "sonnet";
 
+  const query = await getQueryFn();
+  const existingSessionId = sessionMap.get(ws);
+
   const queryOptions: Record<string, unknown> = {
-    maxTurns: 3,
+    maxTurns: 5,
     model: supervisorModel,
     abortController: new AbortController(),
     permissionMode: "bypassPermissions" as const,
+    allowDangerouslySkipPermissions: true,
     includePartialMessages: true,
+    persistSession: false,
+    thinking: { type: "disabled" },
+    systemPrompt: buildSupervisorSystemPrompt(),
+    outputFormat: {
+      type: "json_schema",
+      schema: SUPERVISOR_OUTPUT_SCHEMA,
+    },
   };
 
-  if (ws) {
-    queryOptions.cwd = ws;
-  }
-
-  const existingSession = getSession(ws);
-  if (existingSession) {
-    queryOptions.resume = existingSession;
-  }
-
-  const options = { prompt, options: queryOptions };
+  if (ws) queryOptions.cwd = ws;
+  if (existingSessionId) queryOptions.resume = existingSessionId;
 
   let finalResult = "";
-  let accumulated = "";
 
-  for await (const msg of query(options)) {
+  for await (const msg of query({
+    prompt,
+    options: queryOptions as Parameters<typeof query>[0]["options"],
+  })) {
     if (msg.type === "system") {
-      // system init — connected to agent
       yield { type: "connected", content: "connected" };
     } else if (msg.type === "result") {
       if (msg.subtype === "success") {
-        finalResult = typeof msg.result === "string" ? msg.result : JSON.stringify(msg.result);
+        const structured = (msg as Record<string, unknown>).structured_output;
+        const textResult =
+          typeof msg.result === "string" ? msg.result : JSON.stringify(msg.result);
+        finalResult = structured ? JSON.stringify(structured) : textResult;
       }
       if (msg.session_id) {
-        saveSession(ws, msg.session_id as string);
-        currentSessionWorkspace = ws;
+        sessionMap.set(ws, msg.session_id as string);
       }
+    } else if (msg.type === "prompt_suggestion") {
+      const suggestion = (msg as Record<string, unknown>).suggestion;
+      yield { type: "suggestion", content: typeof suggestion === "string" ? suggestion : "" };
     } else if (msg.type === "stream_event") {
-      // Token-level streaming events from includePartialMessages
       const evt = (msg as Record<string, unknown>).event as Record<string, unknown> | undefined;
       if (!evt) continue;
 
       if (evt.type === "content_block_start") {
         const block = evt.content_block as Record<string, unknown> | undefined;
         if (block?.type === "tool_use") {
-          yield { type: "tool_start", content: String(block.name ?? "tool"), toolName: String(block.name ?? "tool") };
+          yield {
+            type: "tool_start",
+            content: String(block.name ?? "tool"),
+            toolName: String(block.name ?? "tool"),
+          };
         }
       } else if (evt.type === "content_block_delta") {
         const delta = evt.delta as Record<string, unknown> | undefined;
         if (!delta) continue;
 
         if (delta.type === "text_delta") {
-          const text = delta.text as string;
-          accumulated += text;
-          yield { type: "text", content: text };
+          yield { type: "text", content: delta.text as string };
         } else if (delta.type === "thinking_delta") {
           yield { type: "thinking", content: delta.thinking as string };
         } else if (delta.type === "input_json_delta") {
@@ -196,21 +153,20 @@ export async function* supervisorStream(prompt: string, workspace?: string): Asy
         yield { type: "block_stop", content: "" };
       }
     } else if (msg.type === "assistant") {
-      // Complete assistant message — extract final text as fallback
       const msgAny = msg as Record<string, unknown>;
       const message = msgAny.message as { content?: unknown[] } | undefined;
       if (message && Array.isArray(message.content)) {
         for (const block of message.content) {
           const b = block as Record<string, unknown>;
-          if (b.type === "text" && !accumulated) {
-            accumulated = b.text as string;
+          if (b.type === "text") {
+            yield { type: "text", content: b.text as string };
           }
         }
       }
     }
   }
 
-  yield { type: "result", content: finalResult || accumulated };
+  yield { type: "result", content: finalResult };
 }
 
 /** Non-streaming wrapper for backward compatibility */
@@ -227,11 +183,9 @@ export async function supervisorSend(prompt: string, workspace?: string): Promis
 /** Reset supervisor session for a workspace (called on workspace switch) */
 export function resetSupervisorSession(workspace?: string): void {
   if (workspace) {
-    deleteSession(workspace);
-    warmPool.delete(workspace);
+    sessionMap.delete(workspace);
   } else {
-    try { fs.unlinkSync(SESSION_FILE); } catch { /* ignore */ }
-    warmPool.clear();
+    sessionMap.clear();
   }
 }
 
@@ -248,7 +202,9 @@ export function buildSupervisorSystemPrompt(): string {
   // Workspace-scoped tasks
   const tasks = listTasks(workspace);
   const running = tasks
-    .filter((t) => ["running", "claimed", "coding", "linting", "building", "testing", "reviewing", "integrating", "repairing"].includes(t.status))
+    .filter((t) =>
+      ["running", "claimed", "coding", "linting", "building", "testing", "reviewing", "integrating", "repairing"].includes(t.status),
+    )
     .map((t) => `${t.spec.id} [${t.status}] ${t.spec.title || t.spec.objective.slice(0, 40)}`);
   const pending = tasks
     .filter((t) => t.status === "pending")
@@ -317,10 +273,14 @@ Always include a human-readable "response" field that summarises what you are do
 }
 
 export function extractSupervisorEnvelope(output: string): SupervisorEnvelope {
-  const obj = extractJSON(output);
-  if (obj && "intent" in obj) {
-    return obj as unknown as SupervisorEnvelope;
-  }
-  // Fallback: treat as plain reply
+  // With outputFormat: json_schema, the result should already be valid JSON
+  try {
+    const obj = JSON.parse(output) as Record<string, unknown>;
+    if (obj && "intent" in obj) {
+      return obj as unknown as SupervisorEnvelope;
+    }
+  } catch { /* fall through */ }
+
+  // Last resort: treat as plain reply
   return { intent: "reply", response: output.trim() };
 }

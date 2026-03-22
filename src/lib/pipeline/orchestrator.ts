@@ -1,4 +1,5 @@
 import "server-only";
+import path from "path";
 import { scheduler as nodeScheduler } from "timers/promises";
 import { getConfig } from "../config";
 import {
@@ -17,6 +18,7 @@ import { runGate } from "./gates";
 import { selectModel, isSelfReview } from "./model-router";
 import { getRuntime } from "../runtime";
 import { compileRepairPrompt } from "../compiler";
+import { detachWorktree, detectGitRepo } from "../worktree";
 import type {
   GateResult,
   GateEvidence,
@@ -126,10 +128,12 @@ export async function runPipeline(
       },
     });
 
+    let repairRounds = 0;
     if (!result.passed) {
       updateTaskStatus(taskId, "repairing");
-      const repaired = await repairLoop(taskId, stageName, stageId, result, workdir, branch, baseBranch);
-      if (!repaired) {
+      const repairOutcome = await repairLoop(taskId, stageName, stageId, result, workdir, branch, baseBranch);
+      repairRounds = repairOutcome.rounds;
+      if (!repairOutcome.repaired) {
         updateTaskStatus(taskId, "escalated");
         publishEvent({ type: "pipeline_escalated", task_id: taskId, data: { stage: stageName } });
         return;
@@ -142,7 +146,7 @@ export async function runPipeline(
       stage: stageName,
       model: modelSel.model,
       gatePassed: result.passed,
-      repairRounds: 0,
+      repairRounds,
       durationMs,
     });
   }
@@ -150,6 +154,19 @@ export async function runPipeline(
   // All gates passed!
   updateTaskStatus(taskId, "done");
   publishEvent({ type: "pipeline_complete", task_id: taskId, data: {} });
+
+  // Best-effort worktree cleanup on success
+  try {
+    const config = getConfig();
+    const repoPath = config.repo ? path.resolve(config.repo) : null;
+    const repoRoot = repoPath ? detectGitRepo(repoPath) : null;
+    if (repoRoot && branch) {
+      const baseDir = config.worktree?.base_dir ?? path.join(repoRoot, ".hive/worktrees");
+      detachWorktree(repoRoot, baseDir, branch);
+    }
+  } catch {
+    /* best effort */
+  }
 }
 
 /**
@@ -163,11 +180,13 @@ async function repairLoop(
   workdir: string,
   branch: string,
   baseBranch: string,
-): Promise<boolean> {
+): Promise<{ repaired: boolean; rounds: number }> {
   const maxRounds = getConfig().pipeline?.max_repair_rounds ?? 3;
   let currentResult = gateResult;
+  let completedRounds = 0;
 
   for (let round = 1; round <= maxRounds; round++) {
+    completedRounds = round;
     if (pausedTasks.has(taskId)) {
       await waitForResume(taskId);
     }
@@ -242,7 +261,7 @@ async function repairLoop(
           gateReport: retryResult,
           finishedAt: new Date().toISOString(),
         });
-        return true;
+        return { repaired: true, rounds: completedRounds };
       }
 
       currentResult = retryResult;
@@ -257,7 +276,7 @@ async function repairLoop(
     }
   }
 
-  return false;
+  return { repaired: false, rounds: completedRounds };
 }
 
 /**

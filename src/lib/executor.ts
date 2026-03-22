@@ -5,20 +5,31 @@ import { compile } from "./compiler";
 import { getTask, listTasks, updateTaskStatus, createAttempt, saveAttemptBranch, completeAttempt, saveArtifact } from "./scheduler";
 import { getConfig, getOutputDir } from "./config";
 import { createWorktree, detachWorktree, getWorktreeDiff, detectGitRepo } from "./worktree";
-import { publishEvent } from "./events";
+import { publishEvent, setRateLimitPaused } from "./events";
 import { getRuntime } from "./runtime";
 import { runPipeline } from "./pipeline/orchestrator";
-import type { Role, TaskStatus } from "./types";
+import type { Role, TaskStatus, AgentProfile } from "./types";
 
 // Track active runs per agent
 const activeRuns: Record<string, number> = {};
 // Track session history per task for follow-ups
 const taskSessions: Record<string, string[]> = {};
+// Track AbortControllers for cancel support
+const taskAbortControllers = new Map<string, AbortController>();
 // Prevent concurrent dispatch loops
 let dispatching = false;
 
 export function getActiveRuns(): Record<string, number> {
   return { ...activeRuns };
+}
+
+/** Cancel a running task by signaling its abort controller */
+export function cancelTask(taskId: string): boolean {
+  const controller = taskAbortControllers.get(taskId);
+  if (!controller) return false;
+  controller.abort();
+  taskAbortControllers.delete(taskId);
+  return true;
 }
 
 export function getTaskSessionHistory(taskId: string): string[] {
@@ -75,7 +86,7 @@ export async function runTask(taskId: string, agentName: string, role: string): 
         workdir = createWorktree(repoRoot, baseDir, branch);
         // Save branch info to attempt for later merge/cleanup
         saveAttemptBranch(attemptId, branch);
-      } catch (err: any) {
+      } catch (err: unknown) {
         // Fall back to output dir
         const taskOutDir = path.join(outputDir, taskId);
         fs.mkdirSync(taskOutDir, { recursive: true });
@@ -83,7 +94,7 @@ export async function runTask(taskId: string, agentName: string, role: string): 
         publishEvent({
           type: "task_output",
           task_id: taskId,
-          data: { line: `[warn] worktree create failed: ${err.message} -- using output dir` },
+          data: { line: `[warn] worktree create failed: ${err instanceof Error ? err.message : String(err)} -- using output dir` },
         });
       }
     } else {
@@ -104,6 +115,19 @@ export async function runTask(taskId: string, agentName: string, role: string): 
       data: { line: `[hive] prompt length: ${prompt.length} chars` },
     });
 
+    // Map role to agent profile for the new SDK
+    const roleToProfile: Record<string, AgentProfile> = {
+      writer: "coder",
+      reviewer: "reviewer",
+      tester: "tester",
+      fixer: "repairer",
+    };
+    const agentProfile = roleToProfile[role] ?? "coder";
+
+    // Track abort controller for cancel support
+    const abortController = new AbortController();
+    taskAbortControllers.set(taskId, abortController);
+
     // Run the agent via pluggable runtime
     let output = "";
     let exitCode = 0;
@@ -115,7 +139,21 @@ export async function runTask(taskId: string, agentName: string, role: string): 
       branch,
       taskId,
       attemptId,
+      agentProfile,
+      enableCheckpointing: agentProfile === "coder",
+      budgetUsd: config.budget?.max_per_task,
+      use1mContext: config.budget?.use_1m_context,
+      fallbackModel: config.budget?.fallback_model,
+      // Pass the abort signal so the runtime can interrupt the SDK query
+      abortSignal: abortController.signal,
     })) {
+      // Check if cancelled (belt-and-suspenders — runtime should stop on its own via signal)
+      if (abortController.signal.aborted) {
+        exitCode = 130; // SIGINT convention
+        output = "Task cancelled by user";
+        break;
+      }
+
       switch (event.type) {
         case "output":
           publishEvent({
@@ -138,8 +176,56 @@ export async function runTask(taskId: string, agentName: string, role: string): 
         case "artifact":
           saveArtifact(attemptId, event.artifactType, event.path);
           break;
+        case "tool_use":
+          publishEvent({
+            type: "agent_tool_use",
+            task_id: taskId,
+            data: { tool: event.toolName, elapsed: event.elapsed },
+          });
+          break;
+        case "progress":
+          publishEvent({
+            type: "agent_progress",
+            task_id: taskId,
+            data: { summary: event.summary },
+          });
+          break;
+        case "cost":
+          publishEvent({
+            type: "task_cost",
+            task_id: taskId,
+            data: { totalUsd: event.totalUsd, inputTokens: event.inputTokens, outputTokens: event.outputTokens },
+          });
+          break;
+        case "rate_limited":
+          setRateLimitPaused(true, taskId);
+          publishEvent({
+            type: "rate_limit",
+            task_id: taskId,
+            data: { retryAfterMs: event.retryAfterMs },
+          });
+          break;
+        case "compacted":
+          publishEvent({
+            type: "task_output",
+            task_id: taskId,
+            data: { line: `[hive] context compacted (trigger=${event.trigger})` },
+          });
+          break;
+        case "subtask":
+          publishEvent({
+            type: "task_output",
+            task_id: taskId,
+            data: { line: `[hive] subtask ${event.status}${event.summary ? `: ${event.summary}` : ""}` },
+          });
+          break;
       }
     }
+
+    // Cleanup abort controller
+    taskAbortControllers.delete(taskId);
+    // Clear rate-limit pause flag once the task loop exits
+    setRateLimitPaused(false, taskId);
 
     const duration = Date.now() - startTime;
     const success = exitCode === 0;

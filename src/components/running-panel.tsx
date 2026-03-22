@@ -15,18 +15,18 @@ type FilterKey = "all" | "running" | "pending" | "done" | "failed";
 
 const filterConfig: Record<FilterKey, { label: string; statuses: TaskStatus[]; dotClass: string }> = {
   all: { label: "all", statuses: [], dotClass: "bg-zinc-500" },
-  running: { label: "running", statuses: ["running", "claimed"], dotClass: "bg-blue-500" },
-  pending: { label: "pending", statuses: ["pending", "reviewing"], dotClass: "bg-zinc-500" },
+  running: { label: "running", statuses: ["running", "claimed", "coding", "linting", "building", "testing", "integrating", "repairing"], dotClass: "bg-blue-500" },
+  pending: { label: "pending", statuses: ["pending", "reviewing", "decomposed", "paused"], dotClass: "bg-zinc-500" },
   done: { label: "done", statuses: ["done", "evaluated"], dotClass: "bg-green-500" },
-  failed: { label: "failed", statuses: ["failed"], dotClass: "bg-red-500" },
+  failed: { label: "failed", statuses: ["failed", "escalated"], dotClass: "bg-red-500" },
 };
 
 const filterOrder: FilterKey[] = ["all", "running", "pending", "done", "failed"];
 
 function getStatusGroup(status: TaskStatus): FilterKey {
-  if (status === "running" || status === "claimed") return "running";
-  if (status === "pending" || status === "reviewing") return "pending";
-  if (status === "failed") return "failed";
+  if (status === "running" || status === "claimed" || status === "coding" || status === "linting" || status === "building" || status === "testing" || status === "integrating" || status === "repairing") return "running";
+  if (status === "pending" || status === "reviewing" || status === "decomposed" || status === "paused") return "pending";
+  if (status === "failed" || status === "escalated") return "failed";
   return "done";
 }
 
@@ -83,7 +83,7 @@ export function RunningPanel({ tasks }: RunningPanelProps) {
     : tasks.filter((t) => filterConfig[filter].statuses.includes(t.status));
 
   // Sort: running first, then pending, then failed, then done
-  const sortOrder: Record<string, number> = { running: 0, claimed: 0, pending: 1, reviewing: 1, failed: 2, done: 3, evaluated: 3 };
+  const sortOrder: Record<string, number> = { running: 0, claimed: 0, coding: 0, linting: 0, building: 0, testing: 0, integrating: 0, repairing: 0, pending: 1, reviewing: 1, decomposed: 1, paused: 1, failed: 2, escalated: 2, done: 3, evaluated: 3 };
   const sorted = [...filtered].sort((a, b) => {
     const oa = sortOrder[a.status] ?? 9;
     const ob = sortOrder[b.status] ?? 9;

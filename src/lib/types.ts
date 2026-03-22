@@ -1,3 +1,6 @@
+// Re-export runtime types used across the app
+export type { AgentProfile } from "./runtime/types";
+
 // Task lifecycle
 export type TaskStatus =
   | "pending" | "claimed" | "running" | "done"
@@ -103,11 +106,23 @@ export interface AgentCfg {
   max_concurrent: number;
 }
 
+export interface AgentBudgetConfig {
+  /** Max USD per task execution */
+  max_per_task?: number;
+  /** Max USD per day across all tasks */
+  max_daily?: number;
+  /** Enable 1M context for large codebases */
+  use_1m_context?: boolean;
+  /** Fallback model when primary model is unavailable (e.g. "claude-haiku-4-5") */
+  fallback_model?: string;
+}
+
 export interface HiveConfig {
   repo: string;
   output_dir?: string;
   agents: Record<string, AgentCfg>;
   supervisor?: { agent: string; model?: string };
+  budget?: AgentBudgetConfig;
   scheduler?: { lease_ttl?: string; heartbeat_interval?: string; max_attempts?: number };
   evaluation?: {
     auto_gate?: string[];
@@ -131,7 +146,7 @@ export interface AgentHealth {
 export interface SSEEvent {
   type: string;
   task_id?: string;
-  data: any;
+  data: Record<string, unknown>;
   timestamp?: string;
 }
 

@@ -2,15 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { v4 as uuidv4 } from "uuid";
 import {
   supervisorStream,
-  buildSupervisorSystemPrompt,
   extractSupervisorEnvelope,
 } from "@/lib/supervisor";
 import { submitTasks, updateTaskStatus } from "@/lib/scheduler";
 import { getConfig } from "@/lib/config";
 import { runTask, scheduleDispatch } from "@/lib/executor";
 import { publishEvent } from "@/lib/events";
-import { addChatMessage, getChatHistory } from "@/lib/chat-store";
-import { setChatStatus } from "@/lib/chat-status";
+import { addChatMessage } from "@/lib/chat-store";
 import type { ChatMessage } from "@/lib/types";
 
 export async function POST(req: NextRequest) {
@@ -36,50 +34,40 @@ export async function POST(req: NextRequest) {
   };
   addChatMessage(userMsg);
 
-  // Build prompt with history
-  const sysPrompt = buildSupervisorSystemPrompt();
-  const history = getChatHistory();
-  const historyLines = history.map(
-    (m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`,
-  );
-  const fullPrompt =
-    sysPrompt + "\n\nConversation history:\n" + historyLines.join("\n");
-
   try {
-    // Stream supervisor events — write status to file for frontend polling
-    setChatStatus("thinking", "connecting to agent...");
+    // Stream supervisor events — publish status via SSE for frontend polling
+    publishEvent({ type: "chat.status", data: { state: "thinking", detail: "connecting to agent..." } });
     let rawOutput = "";
     let textBuffer = "";
     let currentTool = "";
 
-    for await (const event of supervisorStream(fullPrompt)) {
+    for await (const event of supervisorStream(message)) {
       switch (event.type) {
         case "connected":
-          setChatStatus("thinking", "agent connected, waiting for response...");
+          publishEvent({ type: "chat.status", data: { state: "thinking", detail: "agent connected, waiting for response..." } });
           break;
         case "result":
           rawOutput = event.content;
           break;
         case "text":
           textBuffer += event.content;
-          // Update status with latest text chunk (show tail)
-          setChatStatus("writing", textBuffer.slice(-200));
+          publishEvent({ type: "chat.status", data: { state: "writing", detail: textBuffer.slice(-200) } });
           break;
         case "thinking":
-          setChatStatus("reasoning", event.content.slice(-200));
+          publishEvent({ type: "chat.status", data: { state: "reasoning", detail: event.content.slice(-200) } });
           break;
         case "tool_start":
           currentTool = event.toolName ?? event.content;
-          setChatStatus("using_tool", currentTool);
+          publishEvent({ type: "chat.status", data: { state: "using_tool", detail: currentTool } });
           break;
         case "tool_delta":
-          setChatStatus("using_tool", `${currentTool}: ${event.content.slice(0, 150)}`);
+          publishEvent({ type: "chat.status", data: { state: "using_tool", detail: `${currentTool}: ${event.content.slice(0, 150)}` } });
           break;
         case "block_stop":
           break;
       }
     }
-    setChatStatus("idle");
+    publishEvent({ type: "chat.status", data: { state: "idle", detail: "" } });
 
     const env = extractSupervisorEnvelope(rawOutput);
     if (!env.response) env.response = rawOutput.trim() || "(no response)";
@@ -164,6 +152,7 @@ export async function POST(req: NextRequest) {
       },
     });
 
+    const statusCode = env.intent === "create_tasks" ? 201 : 200;
     return NextResponse.json(
       {
         data: {
@@ -177,7 +166,7 @@ export async function POST(req: NextRequest) {
           agent: env.agent,
         },
       },
-      { status: 201 },
+      { status: statusCode },
     );
   } catch (err: unknown) {
     const errMsg = err instanceof Error ? err.message : String(err);
