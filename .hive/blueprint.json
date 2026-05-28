@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "workspace": "/Users/aaron/azex/hive-ts",
+  "scannedAt": "2026-03-21T13:33:17.287Z",
+  "project": {
+    "type": "node",
+    "configFiles": [
+      "package.json",
+      "tsconfig.json",
+      "next.config.ts",
+      "hive.yaml",
+      "CLAUDE.md"
+    ],
+    "scripts": {
+      "dev": "next dev --port 58080",
+      "build": "next build",
+      "start": "next start --port 58080",
+      "lint": "next lint",
+      "serve": "next dev --port 58080"
+    },
+    "topDirs": [
+      "data",
+      "docs",
+      "output",
+      "src"
+    ],
+    "deps": [
+      "@anthropic-ai/claude-code",
+      "@base-ui/react",
+      "better-sqlite3",
+      "class-variance-authority",
+      "clsx",
+      "execa",
+      "js-yaml",
+      "lucide-react",
+      "next",
+      "react",
+      "react-dom",
+      "server-only",
+      "shadcn",
+      "tailwind-merge",
+      "tw-animate-css",
+      "uuid"
+    ],
+    "devDeps": [
+      "@tailwindcss/postcss",
+      "@types/better-sqlite3",
+      "@types/js-yaml",
+      "@types/node",
+      "@types/react",
+      "@types/react-dom",
+      "@types/uuid",
+      "postcss",
+      "tailwindcss",
+      "typescript"
+    ]
+  },
+  "git": {
+    "branch": "main",
+    "commitHash": "2cc105fd8189",
+    "commitMessage": "perf(chat): pre-load SDK module + connected event for faster streaming",
+    "commitDate": "2026-03-21T21:27:19+08:00",
+    "dirtyFiles": 5
+  },
+  "checkpoint": null,
+  "sessions": []
+}
